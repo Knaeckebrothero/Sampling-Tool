@@ -1,0 +1,45 @@
+{
+  "column_types": {
+    "id": "number",
+    "key figure": "text",
+    "value": "number",
+    "date": "date",
+    "legal form": "text"
+  },
+  "global_filters": [
+    {
+      "column": "date",
+      "column_type": "date",
+      "filter_config": {
+        "from": "2024-01-01",
+        "to": "2024-12-31"
+      }
+    }
+  ],
+  "sampling_rules": [
+    {
+      "name": "GmbH",
+      "column": "legal form",
+      "column_type": "text",
+      "filter_config": {
+        "type": "equals",
+        "values": [
+          "GmbH"
+        ]
+      },
+      "sample_count": 5
+    },
+    {
+      "name": "AG",
+      "column": "legal form",
+      "column_type": "text",
+      "filter_config": {
+        "type": "equals",
+        "values": [
+          "AG"
+        ]
+      },
+      "sample_count": 5
+    }
+  ]
+}
