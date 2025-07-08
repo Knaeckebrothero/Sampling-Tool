@@ -132,7 +132,7 @@ class HybridSampleTestingApp:
             delimiter = self.delimiter_var.get()
             try:
                 if messagebox.askyesno("Confirm Import",
-                                     "This will replace all existing data in the database. Continue?"):
+                                       "This will replace all existing data in the database. Continue?"):
                     self.data_handler.load_csv(filename, delimiter)
                     self.load_file()  # Refresh display
                     messagebox.showinfo("Success", "CSV data imported successfully!")

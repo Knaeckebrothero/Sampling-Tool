@@ -6,22 +6,16 @@ import pandas as pd
 from typing import Optional, Union, List, Tuple, Any, Dict
 from datetime import datetime
 
-
 # Set up logging
 log = logging.getLogger(__name__)
 
 
 class Singleton:
-    """
-    Ensures that a class has only one instance and provides a global point of access to that instance.
-    """
+    """Simple singleton pattern - included directly in database.py"""
     _instance = None
 
     @classmethod
     def get_instance(cls, *args, **kwargs):
-        """
-        Provides a thread-safe singleton instance of the class.
-        """
         if cls._instance is None:
             cls._instance = cls(*args, **kwargs)
         return cls._instance
@@ -35,7 +29,7 @@ class Database(Singleton):
     def __init__(self, db_path: str = "./data/sampling.db"):
         """
         Initialize database connection.
-
+        
         :param db_path: Path to the SQLite database file
         """
         log.debug("Initializing database connection...")
@@ -78,7 +72,7 @@ class Database(Singleton):
     def _verify_tables(self, required_tables: List[str] = None):
         """
         Verify that required tables exist in the database.
-
+        
         :param required_tables: List of required table names
         :raises RuntimeError: If required tables are missing
         """
@@ -105,7 +99,7 @@ class Database(Singleton):
     def query(self, query: str, params: Optional[Union[tuple, list]] = None) -> List[sqlite3.Row]:
         """
         Execute a SELECT query and return results.
-
+        
         :param query: SQL query string
         :param params: Query parameters
         :return: List of rows
@@ -132,7 +126,7 @@ class Database(Singleton):
     def insert(self, query: str, params: Optional[Any] = None) -> int:
         """
         Execute an INSERT query and return the last inserted row ID.
-
+        
         :param query: SQL insert query
         :param params: Query parameters
         :return: ID of the last inserted row
@@ -156,7 +150,7 @@ class Database(Singleton):
     def update(self, query: str, params: Optional[Any] = None) -> int:
         """
         Execute an UPDATE query and return the number of affected rows.
-
+        
         :param query: SQL update query
         :param params: Query parameters
         :return: Number of affected rows
@@ -178,7 +172,7 @@ class Database(Singleton):
     def delete(self, query: str, params: Optional[Any] = None) -> int:
         """
         Execute a DELETE query and return the number of affected rows.
-
+        
         :param query: SQL delete query
         :param params: Query parameters
         :return: Number of affected rows
@@ -200,7 +194,7 @@ class Database(Singleton):
     def execute_script(self, script: str):
         """
         Execute a SQL script (multiple statements).
-
+        
         :param script: SQL script
         """
         try:
@@ -218,7 +212,7 @@ class Database(Singleton):
     def get_table_columns(self, table_name: str = "financial_data") -> List[str]:
         """
         Get column names for a table.
-
+        
         :param table_name: Name of the table
         :return: List of column names
         """
@@ -229,7 +223,7 @@ class Database(Singleton):
     def get_column_info(self, table_name: str = "financial_data") -> Dict[str, str]:
         """
         Get column information including data types.
-
+        
         :param table_name: Name of the table
         :return: Dictionary of column names to SQL types
         """
@@ -240,7 +234,7 @@ class Database(Singleton):
     def get_all_data(self, table_name: str = "financial_data", limit: Optional[int] = None) -> List[Dict]:
         """
         Retrieve all data from the main table.
-
+        
         :param table_name: Name of the table
         :param limit: Optional limit on number of records
         :return: List of dictionaries containing the data
@@ -255,7 +249,7 @@ class Database(Singleton):
     def get_sample_data(self, table_name: str = "financial_data", limit: int = 100) -> List[Dict]:
         """
         Get a sample of data for preview/type detection.
-
+        
         :param table_name: Name of the table
         :param limit: Number of rows to retrieve
         :return: List of dictionaries
@@ -263,10 +257,10 @@ class Database(Singleton):
         return self.get_all_data(table_name, limit)
 
     def get_filtered_data(self, table_name: str = "financial_data",
-                         where_clause: str = "", params: Optional[tuple] = None) -> List[Dict]:
+                          where_clause: str = "", params: Optional[tuple] = None) -> List[Dict]:
         """
         Get filtered data based on WHERE clause.
-
+        
         :param table_name: Name of the table
         :param where_clause: SQL WHERE clause (without WHERE keyword)
         :param params: Query parameters
@@ -280,10 +274,10 @@ class Database(Singleton):
         return [dict(row) for row in result]
 
     def get_distinct_values(self, column: str, table_name: str = "financial_data",
-                           limit: int = 100) -> List[Any]:
+                            limit: int = 100) -> List[Any]:
         """
         Get distinct values for a column.
-
+        
         :param column: Column name
         :param table_name: Table name
         :param limit: Maximum number of distinct values
@@ -294,10 +288,10 @@ class Database(Singleton):
         return [row[column] for row in result]
 
     def get_row_count(self, table_name: str = "financial_data",
-                     where_clause: str = "", params: Optional[tuple] = None) -> int:
+                      where_clause: str = "", params: Optional[tuple] = None) -> int:
         """
         Get count of rows, optionally with filter.
-
+        
         :param table_name: Table name
         :param where_clause: Optional WHERE clause
         :param params: Query parameters
@@ -313,16 +307,16 @@ class Database(Singleton):
     def save_configuration(self, name: str, config_data: dict, description: str = "") -> int:
         """
         Save a sampling configuration (filters and rules).
-
+        
         :param name: Configuration name
         :param config_data: Dictionary containing filters and rules
         :param description: Optional description
         :return: ID of saved configuration
         """
         query = """
-        INSERT INTO configurations (name, description, config_json, created_at)
-        VALUES (?, ?, ?, ?)
-        """
+                INSERT INTO configurations (name, description, config_json, created_at)
+                VALUES (?, ?, ?, ?) \
+                """
         return self.insert(query, (
             name,
             description,
@@ -333,7 +327,7 @@ class Database(Singleton):
     def load_configuration(self, config_id: int) -> Optional[Dict]:
         """
         Load a saved configuration.
-
+        
         :param config_id: Configuration ID
         :return: Configuration data or None
         """
@@ -349,22 +343,22 @@ class Database(Singleton):
     def list_configurations(self) -> List[Dict]:
         """
         List all saved configurations.
-
+        
         :return: List of configuration summaries
         """
         query = """
-        SELECT id, name, description, created_at, updated_at
-        FROM configurations
-        ORDER BY updated_at DESC
-        """
+                SELECT id, name, description, created_at, updated_at
+                FROM configurations
+                ORDER BY updated_at DESC \
+                """
         result = self.query(query)
         return [dict(row) for row in result]
 
     def save_sampling_results(self, config_id: int, results: List[Dict],
-                            summary: Dict) -> int:
+                              summary: Dict) -> int:
         """
         Save sampling results.
-
+        
         :param config_id: Configuration ID used for sampling
         :param results: List of sampled records
         :param summary: Summary information
@@ -372,9 +366,9 @@ class Database(Singleton):
         """
         # Insert into sampling history
         history_query = """
-        INSERT INTO sampling_history (config_id, sample_count, summary_json, created_at)
-        VALUES (?, ?, ?, ?)
-        """
+                        INSERT INTO sampling_history (config_id, sample_count, summary_json, created_at)
+                        VALUES (?, ?, ?, ?) \
+                        """
         history_id = self.insert(history_query, (
             config_id,
             len(results),
@@ -386,9 +380,9 @@ class Database(Singleton):
         if results:
             for result in results:
                 result_query = """
-                INSERT INTO sampling_results (history_id, rule_name, data_json)
-                VALUES (?, ?, ?)
-                """
+                               INSERT INTO sampling_results (history_id, rule_name, data_json)
+                               VALUES (?, ?, ?) \
+                               """
                 # Extract rule name and prepare data
                 rule_name = result.get('_rule_name', 'Unknown')
                 data = {k: v for k, v in result.items() if k != '_rule_name'}
@@ -404,32 +398,32 @@ class Database(Singleton):
     def get_sampling_history(self, limit: int = 50) -> List[Dict]:
         """
         Get sampling history.
-
+        
         :param limit: Number of recent entries to retrieve
         :return: List of sampling history entries
         """
         query = """
-        SELECT sh.*, c.name as config_name
-        FROM sampling_history sh
-        LEFT JOIN configurations c ON sh.config_id = c.id
-        ORDER BY sh.created_at DESC
-        LIMIT ?
-        """
+                SELECT sh.*, c.name as config_name
+                FROM sampling_history sh
+                         LEFT JOIN configurations c ON sh.config_id = c.id
+                ORDER BY sh.created_at DESC
+                    LIMIT ? \
+                """
         result = self.query(query, (limit,))
         return [dict(row) for row in result]
 
     def get_sampling_results(self, history_id: int) -> List[Dict]:
         """
         Get results for a specific sampling run.
-
+        
         :param history_id: Sampling history ID
         :return: List of sampling results
         """
         query = """
-        SELECT * FROM sampling_results
-        WHERE history_id = ?
-        ORDER BY id
-        """
+                SELECT * FROM sampling_results
+                WHERE history_id = ?
+                ORDER BY id \
+                """
         result = self.query(query, (history_id,))
 
         results = []
@@ -441,10 +435,10 @@ class Database(Singleton):
         return results
 
     def import_csv_data(self, csv_path: str, table_name: str = "financial_data",
-                       truncate: bool = False):
+                        truncate: bool = False):
         """
         Import data from CSV file into the database.
-
+        
         :param csv_path: Path to CSV file
         :param table_name: Target table name
         :param truncate: Whether to clear existing data first
@@ -465,13 +459,13 @@ class Database(Singleton):
     def get_column_statistics(self, column: str, table_name: str = "financial_data") -> Dict:
         """
         Get statistics for a numeric column.
-
+        
         :param column: Column name
         :param table_name: Table name
         :return: Dictionary with min, max, avg, count
         """
         query = f"""
-        SELECT
+        SELECT 
             MIN(CAST({column} AS REAL)) as min_val,
             MAX(CAST({column} AS REAL)) as max_val,
             AVG(CAST({column} AS REAL)) as avg_val,
