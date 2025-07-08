@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 import random
+import json
 from collections import defaultdict
 
 
@@ -54,20 +55,32 @@ class HybridSampleTestingApp:
         self.root.rowconfigure(0, weight=1)
 
     def create_data_tab(self):
-        # File selection frame
-        file_frame = ttk.Frame(self.data_tab, padding="10")
-        file_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        # Database connection frame
+        db_frame = ttk.Frame(self.data_tab, padding="10")
+        db_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
 
-        ttk.Label(file_frame, text="CSV File:").grid(row=0, column=0, sticky=tk.W)
-        self.file_label = ttk.Label(file_frame, text="No file selected", relief=tk.SUNKEN, width=50)
+        ttk.Label(db_frame, text="Data Source:").grid(row=0, column=0, sticky=tk.W)
+        self.file_label = ttk.Label(db_frame, text="Connecting to database...", relief=tk.SUNKEN, width=50)
         self.file_label.grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
-        ttk.Button(file_frame, text="Browse", command=self.load_file).grid(row=0, column=2)
+        ttk.Button(db_frame, text="Refresh Data", command=self.load_file).grid(row=0, column=2)
 
-        # CSV settings
-        ttk.Label(file_frame, text="Delimiter:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        delimiter_combo = ttk.Combobox(file_frame, textvariable=self.delimiter_var,
+        # Import/Export options
+        ttk.Label(db_frame, text="Import CSV:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        import_frame = ttk.Frame(db_frame)
+        import_frame.grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=5)
+
+        ttk.Button(import_frame, text="Import from CSV...", command=self.import_csv).pack(side=tk.LEFT)
+        ttk.Label(import_frame, text="Delimiter:").pack(side=tk.LEFT, padx=(10, 5))
+        delimiter_combo = ttk.Combobox(import_frame, textvariable=self.delimiter_var,
                                        values=[';', ',', '\t', '|'], width=5)
-        delimiter_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        delimiter_combo.pack(side=tk.LEFT)
+
+        # Saved configurations
+        config_frame = ttk.LabelFrame(self.data_tab, text="Saved Configurations", padding="10")
+        config_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=10, pady=5)
+
+        ttk.Button(config_frame, text="Load Configuration", command=self.load_saved_config).grid(row=0, column=0, padx=5)
+        ttk.Button(config_frame, text="View History", command=self.view_history).grid(row=0, column=1, padx=5)
 
         # Column info frame
         info_frame = ttk.LabelFrame(self.data_tab, text="Detected Columns", padding="10")
@@ -104,6 +117,132 @@ class HybridSampleTestingApp:
         info_frame.rowconfigure(0, weight=1)
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
+
+        # Initialize data on startup
+        self.load_file()
+
+    def import_csv(self):
+        """Import data from CSV file into database"""
+        filename = filedialog.askopenfilename(
+            title="Select CSV file to import",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if filename:
+            delimiter = self.delimiter_var.get()
+            try:
+                if messagebox.askyesno("Confirm Import",
+                                     "This will replace all existing data in the database. Continue?"):
+                    self.data_handler.load_csv(filename, delimiter)
+                    self.load_file()  # Refresh display
+                    messagebox.showinfo("Success", "CSV data imported successfully!")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to import CSV: {str(e)}")
+
+    def load_saved_config(self):
+        """Load a saved configuration from database"""
+        configs = self.data_handler.get_configurations_list()
+
+        if not configs:
+            messagebox.showinfo("No Configurations", "No saved configurations found.")
+            return
+
+        # Create selection dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Select Configuration")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Configuration list
+        columns = ('Name', 'Description', 'Created')
+        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=10)
+
+        tree.heading('Name', text='Configuration Name')
+        tree.heading('Description', text='Description')
+        tree.heading('Created', text='Created Date')
+
+        tree.column('Name', width=200)
+        tree.column('Description', width=250)
+        tree.column('Created', width=150)
+
+        # Add configurations to tree
+        for config in configs:
+            tree.insert('', tk.END, values=(
+                config['name'],
+                config.get('description', ''),
+                config.get('created_at', '')[:19]  # Truncate timestamp
+            ))
+
+        tree.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        # Buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        def load_selected():
+            selection = tree.selection()
+            if selection:
+                index = tree.index(selection[0])
+                config = configs[index]
+                try:
+                    self.data_handler.load_configuration(config['name'])
+                    self.update_filters_display()
+                    self.update_rules_display()
+                    self.apply_global_filters()
+                    dialog.destroy()
+                    messagebox.showinfo("Success", f"Loaded configuration: {config['name']}")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
+
+        ttk.Button(button_frame, text="Load", command=load_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def view_history(self):
+        """View sampling history"""
+        history = self.data_handler.get_sampling_history()
+
+        if not history:
+            messagebox.showinfo("No History", "No sampling history found.")
+            return
+
+        # Create history dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Sampling History")
+        dialog.geometry("700x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # History list
+        columns = ('Date', 'Configuration', 'Samples', 'Summary')
+        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=12)
+
+        tree.heading('Date', text='Sample Date')
+        tree.heading('Configuration', text='Configuration Used')
+        tree.heading('Samples', text='Sample Count')
+        tree.heading('Summary', text='Summary')
+
+        tree.column('Date', width=150)
+        tree.column('Configuration', width=200)
+        tree.column('Samples', width=100)
+        tree.column('Summary', width=250)
+
+        # Add history to tree
+        for entry in history:
+            summary = json.loads(entry.get('summary_json', '{}'))
+            summary_text = f"From {summary.get('total_filtered', 0)} filtered records"
+
+            tree.insert('', tk.END, values=(
+                entry.get('created_at', '')[:19],
+                entry.get('config_name', 'Unknown'),
+                entry.get('sample_count', 0),
+                summary_text
+            ))
+
+        tree.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        # Close button
+        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
 
     def create_filters_tab(self):
         # Instructions
@@ -264,31 +403,20 @@ class HybridSampleTestingApp:
         results_frame.rowconfigure(0, weight=1)
 
     def load_file(self):
-        filename = filedialog.askopenfilename(
-            title="Select CSV file",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
+        # For database version, this refreshes data from database
+        try:
+            self.data_handler.refresh_data()
 
-        if filename:
-            try:
-                delimiter = self.delimiter_var.get()
-                self.data_handler.load_csv(filename, delimiter)
+            self.file_label.config(text=self.data_handler.get_filename())
+            self.update_column_display()
+            self.update_preview()
+            self.setup_dynamic_trees()
 
-                self.file_label.config(text=self.data_handler.get_filename())
-                self.update_column_display()
-                self.update_preview()
-                self.setup_dynamic_trees()
+            messagebox.showinfo("Success",
+                                f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
 
-                # Clear filters and rules when loading new file
-                self.data_handler.clear_filters_and_rules()
-                self.update_filters_display()
-                self.update_rules_display()
-
-                messagebox.showinfo("Success",
-                                    f"Loaded {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
-
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load file: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to connect to database: {str(e)}")
 
     def update_column_display(self):
         """Update the column list display"""
