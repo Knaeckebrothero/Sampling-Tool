@@ -54,6 +54,9 @@ class HybridSampleTestingApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
+        # Initialize data after all widgets are created
+        self.load_file()
+
     def create_data_tab(self):
         # Database connection frame
         db_frame = ttk.Frame(self.data_tab, padding="10")
@@ -117,9 +120,6 @@ class HybridSampleTestingApp:
         info_frame.rowconfigure(0, weight=1)
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
-
-        # Initialize data on startup
-        self.load_file()
 
     def import_csv(self):
         """Import data from CSV file into database"""
@@ -412,11 +412,15 @@ class HybridSampleTestingApp:
             self.update_preview()
             self.setup_dynamic_trees()
 
-            messagebox.showinfo("Success",
-                                f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
+            # Only show success if we have data
+            if self.data_handler.data:
+                messagebox.showinfo("Success",
+                                    f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
+            else:
+                messagebox.showwarning("Warning", "Database is empty. Please import CSV data.")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to connect to database: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load data: {str(e)}")
 
     def update_column_display(self):
         """Update the column list display"""
@@ -465,13 +469,15 @@ class HybridSampleTestingApp:
 
     def setup_dynamic_trees(self):
         """Setup the results tree with dynamic columns"""
-        # Results tree columns: Rule Name + all data columns
-        columns = ['Rule'] + self.data_handler.column_names
-        self.results_tree['columns'] = columns
+        # Only setup if results_tree exists (it might not during initialization)
+        if hasattr(self, 'results_tree'):
+            # Results tree columns: Rule Name + all data columns
+            columns = ['Rule'] + self.data_handler.column_names
+            self.results_tree['columns'] = columns
 
-        for col in columns:
-            self.results_tree.heading(col, text=col)
-            self.results_tree.column(col, width=120)
+            for col in columns:
+                self.results_tree.heading(col, text=col)
+                self.results_tree.column(col, width=120)
 
     def add_global_filter(self):
         if not self.data_handler.column_names:
