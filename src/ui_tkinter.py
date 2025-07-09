@@ -6,11 +6,11 @@ import json
 from collections import defaultdict
 
 
-class HybridSampleTestingApp:
+class SimpleSampleTestingApp:
     def __init__(self, root, data_handler):
         self.root = root
-        self.root.title("Hybrid Dimensional & Stratified Sampling Tool")
-        self.root.geometry("1300x800")
+        self.root.title("Simple Stratified Sampling Tool")
+        self.root.geometry("1200x700")
 
         # Reference to data handler
         self.data_handler = data_handler
@@ -67,27 +67,19 @@ class HybridSampleTestingApp:
         self.file_label.grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
         ttk.Button(db_frame, text="Refresh Data", command=self.load_file).grid(row=0, column=2)
 
-        # Import/Export options
-        ttk.Label(db_frame, text="Import CSV:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        import_frame = ttk.Frame(db_frame)
-        import_frame.grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        # Import CSV frame
+        import_frame = ttk.LabelFrame(self.data_tab, text="Import CSV Data", padding="10")
+        import_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=10, pady=5)
 
-        ttk.Button(import_frame, text="Import from CSV...", command=self.import_csv).pack(side=tk.LEFT)
-        ttk.Label(import_frame, text="Delimiter:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Button(import_frame, text="Import CSV File...", command=self.import_csv).grid(row=0, column=0, padx=5)
+        ttk.Label(import_frame, text="Delimiter:").grid(row=0, column=1, padx=(10, 5))
         delimiter_combo = ttk.Combobox(import_frame, textvariable=self.delimiter_var,
                                        values=[';', ',', '\t', '|'], width=5)
-        delimiter_combo.pack(side=tk.LEFT)
-
-        # Saved configurations
-        config_frame = ttk.LabelFrame(self.data_tab, text="Saved Configurations", padding="10")
-        config_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=10, pady=5)
-
-        ttk.Button(config_frame, text="Load Configuration", command=self.load_saved_config).grid(row=0, column=0, padx=5)
-        ttk.Button(config_frame, text="View History", command=self.view_history).grid(row=0, column=1, padx=5)
+        delimiter_combo.grid(row=0, column=2)
 
         # Column info frame
         info_frame = ttk.LabelFrame(self.data_tab, text="Detected Columns", padding="10")
-        info_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
+        info_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
 
         # Column list
         self.column_listbox = tk.Listbox(info_frame, height=10)
@@ -99,7 +91,7 @@ class HybridSampleTestingApp:
 
         # Data preview
         preview_frame = ttk.LabelFrame(self.data_tab, text="Data Preview", padding="10")
-        preview_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
+        preview_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
 
         # Create preview tree
         self.preview_tree = ttk.Treeview(preview_frame, show='headings', height=10)
@@ -115,7 +107,7 @@ class HybridSampleTestingApp:
 
         # Configure grid
         self.data_tab.columnconfigure(0, weight=1)
-        self.data_tab.rowconfigure(2, weight=1)
+        self.data_tab.rowconfigure(3, weight=1)
         info_frame.columnconfigure(0, weight=1)
         info_frame.rowconfigure(0, weight=1)
         preview_frame.columnconfigure(0, weight=1)
@@ -131,118 +123,11 @@ class HybridSampleTestingApp:
         if filename:
             delimiter = self.delimiter_var.get()
             try:
-                if messagebox.askyesno("Confirm Import",
-                                       "This will replace all existing data in the database. Continue?"):
-                    self.data_handler.load_csv(filename, delimiter)
-                    self.load_file()  # Refresh display
-                    messagebox.showinfo("Success", "CSV data imported successfully!")
+                self.data_handler.load_csv(filename, delimiter)
+                self.load_file()  # Refresh display
+                messagebox.showinfo("Success", "CSV data imported successfully!")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to import CSV: {str(e)}")
-
-    def load_saved_config(self):
-        """Load a saved configuration from database"""
-        configs = self.data_handler.get_configurations_list()
-
-        if not configs:
-            messagebox.showinfo("No Configurations", "No saved configurations found.")
-            return
-
-        # Create selection dialog
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Select Configuration")
-        dialog.geometry("600x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        # Configuration list
-        columns = ('Name', 'Description', 'Created')
-        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=10)
-
-        tree.heading('Name', text='Configuration Name')
-        tree.heading('Description', text='Description')
-        tree.heading('Created', text='Created Date')
-
-        tree.column('Name', width=200)
-        tree.column('Description', width=250)
-        tree.column('Created', width=150)
-
-        # Add configurations to tree
-        for config in configs:
-            tree.insert('', tk.END, values=(
-                config['name'],
-                config.get('description', ''),
-                config.get('created_at', '')[:19]  # Truncate timestamp
-            ))
-
-        tree.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        # Buttons
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(pady=10)
-
-        def load_selected():
-            selection = tree.selection()
-            if selection:
-                index = tree.index(selection[0])
-                config = configs[index]
-                try:
-                    self.data_handler.load_configuration(config['name'])
-                    self.update_filters_display()
-                    self.update_rules_display()
-                    self.apply_global_filters()
-                    dialog.destroy()
-                    messagebox.showinfo("Success", f"Loaded configuration: {config['name']}")
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
-
-        ttk.Button(button_frame, text="Load", command=load_selected).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
-
-    def view_history(self):
-        """View sampling history"""
-        history = self.data_handler.get_sampling_history()
-
-        if not history:
-            messagebox.showinfo("No History", "No sampling history found.")
-            return
-
-        # Create history dialog
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Sampling History")
-        dialog.geometry("700x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        # History list
-        columns = ('Date', 'Configuration', 'Samples', 'Summary')
-        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=12)
-
-        tree.heading('Date', text='Sample Date')
-        tree.heading('Configuration', text='Configuration Used')
-        tree.heading('Samples', text='Sample Count')
-        tree.heading('Summary', text='Summary')
-
-        tree.column('Date', width=150)
-        tree.column('Configuration', width=200)
-        tree.column('Samples', width=100)
-        tree.column('Summary', width=250)
-
-        # Add history to tree
-        for entry in history:
-            summary = json.loads(entry.get('summary_json', '{}'))
-            summary_text = f"From {summary.get('total_filtered', 0)} filtered records"
-
-            tree.insert('', tk.END, values=(
-                entry.get('created_at', '')[:19],
-                entry.get('config_name', 'Unknown'),
-                entry.get('sample_count', 0),
-                summary_text
-            ))
-
-        tree.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        # Close button
-        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
 
     def create_filters_tab(self):
         # Instructions
@@ -323,8 +208,8 @@ class HybridSampleTestingApp:
         ttk.Button(button_frame, text="Edit Rule", command=self.edit_sampling_rule).grid(row=0, column=1, padx=5)
         ttk.Button(button_frame, text="Delete Rule", command=self.delete_sampling_rule).grid(row=0, column=2, padx=5)
         ttk.Button(button_frame, text="Clear All", command=self.clear_sampling_rules).grid(row=0, column=3, padx=5)
-        ttk.Button(button_frame, text="Save Configuration", command=self.save_configuration).grid(row=0, column=4, padx=5)
-        ttk.Button(button_frame, text="Load Configuration", command=self.load_configuration).grid(row=0, column=5, padx=5)
+        ttk.Button(button_frame, text="Save Config", command=self.save_configuration).grid(row=0, column=4, padx=5)
+        ttk.Button(button_frame, text="Load Config", command=self.load_configuration).grid(row=0, column=5, padx=5)
 
         # Rules list
         rules_frame = ttk.LabelFrame(self.rules_tab, text="Sampling Rules with Quotas", padding="10")
@@ -417,7 +302,8 @@ class HybridSampleTestingApp:
                 messagebox.showinfo("Success",
                                     f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
             else:
-                messagebox.showwarning("Warning", "Database is empty. Please import CSV data.")
+                messagebox.showwarning("No Data",
+                                       "Database is empty. Please import CSV data using the 'Import CSV File' button.")
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load data: {str(e)}")
@@ -457,9 +343,17 @@ class HybridSampleTestingApp:
                 if value is None:
                     values.append('')
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.NUMBER:
-                    values.append(f"{value:,.2f}".replace(',', ' ').replace('.', ','))
+                    try:
+                        # Format number with European style (comma as decimal separator)
+                        num_val = float(value)
+                        values.append(f"{num_val:,.2f}".replace(',', ' ').replace('.', ','))
+                    except:
+                        values.append(str(value))
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.DATE:
-                    values.append(value.strftime('%d-%m-%Y'))
+                    if isinstance(value, str):
+                        values.append(value)
+                    else:
+                        values.append(value.strftime('%d-%m-%Y'))
                 else:
                     values.append(str(value))
             self.preview_tree.insert('', tk.END, values=values)
@@ -481,7 +375,7 @@ class HybridSampleTestingApp:
 
     def add_global_filter(self):
         if not self.data_handler.column_names:
-            messagebox.showwarning("Warning", "Please load a CSV file first")
+            messagebox.showwarning("Warning", "Please load data first")
             return
 
         # Get available columns (not already filtered)
@@ -569,7 +463,7 @@ class HybridSampleTestingApp:
 
     def add_sampling_rule(self):
         if not self.data_handler.column_names:
-            messagebox.showwarning("Warning", "Please load a CSV file first")
+            messagebox.showwarning("Warning", "Please load data first")
             return
 
         dialog = SamplingRuleDialog(self.root, "Add Sampling Rule",
@@ -687,9 +581,17 @@ class HybridSampleTestingApp:
                 if value is None:
                     values.append('')
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.NUMBER:
-                    values.append(f"{value:,.2f}".replace(',', ' ').replace('.', ','))
+                    try:
+                        # Format number with European style (comma as decimal separator)
+                        num_val = float(value)
+                        values.append(f"{num_val:,.2f}".replace(',', ' ').replace('.', ','))
+                    except:
+                        values.append(str(value))
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.DATE:
-                    values.append(value.strftime('%d-%m-%Y'))
+                    if isinstance(value, str):
+                        values.append(value)
+                    else:
+                        values.append(value.strftime('%d-%m-%Y'))
                 else:
                     values.append(str(value))
 
@@ -977,7 +879,7 @@ class GlobalFilterDialog:
 
     def ok_clicked(self):
         """Validate and save the filter"""
-        from sample_testing_main import DimensionalFilter  # Import from main module
+        from main import DimensionalFilter  # Import from main module
 
         column = self.column_var.get()
         col_type = self.column_types[column]
@@ -1241,7 +1143,7 @@ class SamplingRuleDialog:
 
     def ok_clicked(self):
         """Validate and save the rule"""
-        from sample_testing_main import SamplingRule  # Import from main module
+        from main import SamplingRule  # Import from main module
 
         # Validate name
         name = self.name_entry.get().strip()
