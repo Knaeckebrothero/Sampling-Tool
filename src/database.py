@@ -42,24 +42,43 @@ class Database:
             raise
 
     def _create_table(self):
-        """Create the financial_data table if it doesn't exist."""
+        """Create the database tables if they don't exist."""
         try:
-            # Check if table exists
-            self.cursor.execute("""
-                                SELECT name FROM sqlite_master
-                                WHERE type='table' AND name='financial_data'
-                                """)
-            if not self.cursor.fetchone():
-                # Create a minimal table - it will be replaced when importing CSV
+            # Read and execute schema.sql
+            schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+            if os.path.exists(schema_path):
+                with open(schema_path, 'r') as f:
+                    schema = f.read()
+                    # SQLite doesn't support UNIQUEIDENTIFIER, replace with TEXT
+                    schema = schema.replace('UNIQUEIDENTIFIER', 'TEXT')
+                    # SQLite doesn't support NVARCHAR, replace with TEXT
+                    schema = schema.replace('NVARCHAR', 'VARCHAR')
+                    # Execute the schema
+                    self.cursor.executescript(schema)
+                    self._conn.commit()
+                    log.info("Database schema created/updated from schema.sql")
+            else:
+                # Fallback: create minimal tables
+                log.warning("schema.sql not found, creating minimal tables")
                 self.cursor.execute("""
-                                    CREATE TABLE financial_data (
-                                                                    id INTEGER PRIMARY KEY
-                                    )
-                                    """)
+                    CREATE TABLE IF NOT EXISTS kundenstamm (
+                        pk TEXT PRIMARY KEY
+                    )
+                """)
+                self.cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS softfact_vw (
+                        pk TEXT PRIMARY KEY
+                    )
+                """)
+                self.cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS kontodaten_vw (
+                        pk TEXT PRIMARY KEY
+                    )
+                """)
                 self._conn.commit()
-                log.debug("Created empty financial_data table")
+                log.debug("Created minimal table structure")
         except sqlite3.Error as e:
-            log.error(f"Error creating table: {e}")
+            log.error(f"Error creating tables: {e}")
             raise
 
     def close(self):
@@ -68,7 +87,7 @@ class Database:
             self._conn.close()
             log.debug("Database connection closed.")
 
-    def get_table_columns(self, table_name: str = "financial_data") -> List[str]:
+    def get_table_columns(self, table_name: str = "kundenstamm") -> List[str]:
         """Get column names for a table."""
         query = f"PRAGMA table_info({table_name})"
         result = self.cursor.execute(query).fetchall()
@@ -76,13 +95,13 @@ class Database:
         log.debug(f"Table columns: {columns}")
         return columns
 
-    def get_column_info(self, table_name: str = "financial_data") -> Dict[str, str]:
+    def get_column_info(self, table_name: str = "kundenstamm") -> Dict[str, str]:
         """Get column information including data types."""
         query = f"PRAGMA table_info({table_name})"
         result = self.cursor.execute(query).fetchall()
         return {row['name']: row['type'] for row in result if row['name'] not in ['index']}
 
-    def get_all_data(self, table_name: str = "financial_data", limit: Optional[int] = None) -> List[Dict]:
+    def get_all_data(self, table_name: str = "kundenstamm", limit: Optional[int] = None) -> List[Dict]:
         """Retrieve all data from the table."""
         query = f"SELECT * FROM {table_name}"
         if limit:
@@ -91,11 +110,11 @@ class Database:
         result = self.cursor.execute(query).fetchall()
         return [dict(row) for row in result]
 
-    def get_sample_data(self, table_name: str = "financial_data", limit: int = 100) -> List[Dict]:
+    def get_sample_data(self, table_name: str = "kundenstamm", limit: int = 100) -> List[Dict]:
         """Get a sample of data for preview/type detection."""
         return self.get_all_data(table_name, limit)
 
-    def get_filtered_data(self, table_name: str = "financial_data",
+    def get_filtered_data(self, table_name: str = "kundenstamm",
                           where_clause: str = "", params: Optional[tuple] = None) -> List[Dict]:
         """Get filtered data based on WHERE clause."""
         query = f"SELECT * FROM {table_name}"
@@ -109,13 +128,13 @@ class Database:
 
         return [dict(row) for row in result]
 
-    def get_row_count(self, table_name: str = "financial_data") -> int:
+    def get_row_count(self, table_name: str = "kundenstamm") -> int:
         """Get count of rows."""
         query = f"SELECT COUNT(*) as count FROM {table_name}"
         result = self.cursor.execute(query).fetchone()
         return result['count'] if result else 0
 
-    def import_csv_data(self, csv_path: str, table_name: str = "financial_data",
+    def import_csv_data(self, csv_path: str, table_name: str = "kundenstamm",
                         delimiter: str = ';', truncate: bool = False):
         """Import data from CSV file into the database."""
         try:
@@ -196,6 +215,68 @@ class Database:
             log.error(traceback.format_exc())
             raise
 
+    def get_all_tables(self) -> List[str]:
+        """Get list of all tables in the database."""
+        query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        result = self.cursor.execute(query).fetchall()
+        return [row['name'] for row in result]
+    
+    def get_production_tables(self) -> List[str]:
+        """Get list of the three production tables."""
+        return ['kundenstamm', 'softfact_vw', 'kontodaten_vw']
+    
+    def get_joined_data(self, base_table: str = "kundenstamm", 
+                       join_tables: Optional[List[str]] = None,
+                       join_conditions: Optional[Dict[str, str]] = None,
+                       where_clause: str = "", 
+                       params: Optional[tuple] = None,
+                       limit: Optional[int] = None) -> List[Dict]:
+        """Get data with joins across multiple tables."""
+        query = f"SELECT * FROM {base_table}"
+        
+        # Add joins if specified
+        if join_tables and join_conditions:
+            for table in join_tables:
+                if table in join_conditions:
+                    query += f" LEFT JOIN {table} ON {join_conditions[table]}"
+        
+        # Add where clause
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        
+        # Add limit
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        # Execute query
+        if params:
+            result = self.cursor.execute(query, params).fetchall()
+        else:
+            result = self.cursor.execute(query).fetchall()
+        
+        return [dict(row) for row in result]
+    
+    def get_table_relationships(self) -> Dict[str, Dict[str, str]]:
+        """Get common join relationships between tables."""
+        return {
+            'kundenstamm': {
+                'softfact_vw': 'kundenstamm.kundennummer = softfact_vw.kundennummer AND kundenstamm.banknummer = softfact_vw.banknummer',
+                'kontodaten_vw': 'kundenstamm.personennummer_pseudonym = kontodaten_vw.personennummer_pseudonym AND kundenstamm.banknummer = kontodaten_vw.banknummer'
+            },
+            'softfact_vw': {
+                'kontodaten_vw': 'softfact_vw.personennummer_pseudonym = kontodaten_vw.personennummer_pseudonym'
+            }
+        }
+    
+    def verify_table_structure(self, table_name: str, expected_columns: List[str]) -> bool:
+        """Verify that a table has the expected columns."""
+        actual_columns = self.get_table_columns(table_name)
+        missing = set(expected_columns) - set(actual_columns)
+        if missing:
+            log.warning(f"Table {table_name} is missing columns: {missing}")
+            return False
+        return True
+    
     @classmethod
     def get_instance(cls, db_path: str = "./data/sampling.db"):
         """Simple factory method to get database instance."""

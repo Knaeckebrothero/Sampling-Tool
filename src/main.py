@@ -262,7 +262,10 @@ class DataHandler:
         self.results = []
 
         # Configuration
-        self.table_name = "financial_data"
+        self.table_name = "kundenstamm"  # Default to main table
+        self.available_tables = self.db.get_production_tables()
+        self.current_table = "kundenstamm"
+        self.join_config = None  # For joined queries
 
         # Make ColumnType accessible
         self.ColumnType = ColumnType
@@ -273,27 +276,33 @@ class DataHandler:
     def _initialize_data(self):
         """Initialize data from database if available"""
         try:
-            # Get column information
-            columns = self.db.get_table_columns(self.table_name)
+            # Check if tables exist
+            existing_tables = self.db.get_all_tables()
+            if not any(table in existing_tables for table in self.available_tables):
+                log.info("Production tables not found in database")
+                return
+                
+            # Get column information from current table
+            columns = self.db.get_table_columns(self.current_table)
             if columns:
                 self.column_names = columns
                 self._detect_column_types()
 
                 # Load data
-                self.data = self.db.get_all_data(self.table_name)
+                self.data = self.db.get_all_data(self.current_table)
                 self.filtered_data = self.data.copy()
 
-                log.info(f"Loaded {len(self.data)} records from database")
+                log.info(f"Loaded {len(self.data)} records from {self.current_table}")
         except Exception as e:
             log.error(f"Error initializing data: {e}")
 
     def _detect_column_types(self):
         """Detect column types from database schema and sample data"""
         # Get SQL column types
-        sql_types = self.db.get_column_info(self.table_name)
+        sql_types = self.db.get_column_info(self.current_table)
 
         # Get sample data for better type detection
-        sample_data = self.db.get_sample_data(self.table_name, 100)
+        sample_data = self.db.get_sample_data(self.current_table, 100)
 
         self.column_types = {}
         for column in self.column_names:
@@ -369,12 +378,27 @@ class DataHandler:
         """Import CSV data into database"""
         try:
             # Import CSV to database
-            self.db.import_csv_data(filename, self.table_name, delimiter=delimiter, truncate=True)
+            # Determine target table from filename
+            import os
+            from src.db_init import get_table_mapping
+            
+            table_name = get_table_mapping(os.path.basename(filename))
+            if not table_name:
+                # Default to kundenstamm if can't determine
+                table_name = "kundenstamm"
+                log.warning(f"Could not determine table from filename, using {table_name}")
+            
+            # Import CSV to database
+            self.db.import_csv_data(filename, table_name, delimiter=delimiter, truncate=True)
+            
+            # Update current table
+            self.current_table = table_name
+            self.table_name = table_name
 
             # Reinitialize data
             self._initialize_data()
 
-            log.info(f"Imported data from {filename}")
+            log.info(f"Imported data from {filename} into {table_name}")
 
         except Exception as e:
             log.error(f"Error importing CSV: {e}")
@@ -386,7 +410,53 @@ class DataHandler:
 
     def get_filename(self):
         """Get current data source description"""
-        return f"Database: {self.table_name} ({len(self.data)} records)"
+        return f"Database: {self.current_table} ({len(self.data)} records)"
+    
+    def set_table(self, table_name: str):
+        """Switch to a different table"""
+        if table_name in self.available_tables:
+            self.current_table = table_name
+            self.table_name = table_name
+            self._initialize_data()
+            # Clear filters and results when switching tables
+            self.clear_global_filters()
+            self.clear_sampling_rules()
+            self.clear_results()
+    
+    def set_join_config(self, join_tables: list, join_type: str = "inner"):
+        """Configure joins between tables"""
+        self.join_config = {
+            'tables': join_tables,
+            'type': join_type
+        }
+        # Reload data with joins
+        self._load_joined_data()
+    
+    def _load_joined_data(self):
+        """Load data using configured joins"""
+        if not self.join_config:
+            return
+            
+        try:
+            relationships = self.db.get_table_relationships()
+            join_conditions = relationships.get(self.current_table, {})
+            
+            self.data = self.db.get_joined_data(
+                base_table=self.current_table,
+                join_tables=self.join_config['tables'],
+                join_conditions=join_conditions
+            )
+            
+            # Update column names to include all joined columns
+            if self.data:
+                self.column_names = list(self.data[0].keys())
+                self._detect_column_types()
+                self.filtered_data = self.data.copy()
+                
+            log.info(f"Loaded {len(self.data)} records with joins")
+        except Exception as e:
+            log.error(f"Error loading joined data: {e}")
+            self.join_config = None
 
     def clear_filters_and_rules(self):
         """Clear all filters and rules"""

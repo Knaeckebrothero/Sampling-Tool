@@ -66,6 +66,18 @@ class SimpleSampleTestingApp:
         self.file_label = ttk.Label(db_frame, text="Connecting to database...", relief=tk.SUNKEN, width=50)
         self.file_label.grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
         ttk.Button(db_frame, text="Refresh Data", command=self.load_file).grid(row=0, column=2)
+        
+        # Table selector
+        ttk.Label(db_frame, text="Active Table:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        self.table_var = tk.StringVar(value="kundenstamm")
+        self.table_combo = ttk.Combobox(db_frame, textvariable=self.table_var,
+                                        values=self.data_handler.available_tables, 
+                                        state="readonly", width=30)
+        self.table_combo.grid(row=1, column=1, padx=5, pady=(5, 0), sticky=tk.W)
+        self.table_combo.bind('<<ComboboxSelected>>', self.on_table_changed)
+        
+        # Join tables button
+        ttk.Button(db_frame, text="Configure Joins...", command=self.configure_joins).grid(row=1, column=2, pady=(5, 0))
 
         # Import CSV frame
         import_frame = ttk.LabelFrame(self.data_tab, text="Import CSV Data", padding="10")
@@ -678,6 +690,98 @@ class SimpleSampleTestingApp:
             self.data_handler.clear_results()
             self.update_results_display()
             self.results_summary_label.config(text="Results cleared")
+    
+    def on_table_changed(self, event=None):
+        """Handle table selection change"""
+        selected_table = self.table_var.get()
+        if selected_table != self.data_handler.current_table:
+            if self.data_handler.results:
+                if not messagebox.askyesno("Confirm", "Changing tables will clear current results. Continue?"):
+                    # Reset combo to current table
+                    self.table_var.set(self.data_handler.current_table)
+                    return
+            
+            # Change table
+            self.data_handler.set_table(selected_table)
+            self.load_file()
+            messagebox.showinfo("Success", f"Switched to table: {selected_table}")
+    
+    def configure_joins(self):
+        """Open dialog to configure table joins"""
+        dialog = JoinConfigDialog(self.root, self.data_handler)
+        self.root.wait_window(dialog.dialog)
+        
+        if dialog.result:
+            # Apply join configuration
+            self.data_handler.set_join_config(dialog.result['tables'], dialog.result['type'])
+            self.load_file()
+            messagebox.showinfo("Success", "Join configuration applied")
+
+
+class JoinConfigDialog:
+    """Dialog for configuring table joins"""
+    def __init__(self, parent, data_handler):
+        self.result = None
+        self.data_handler = data_handler
+        
+        # Create dialog
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Configure Table Joins")
+        self.dialog.geometry("400x300")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Available tables (excluding current base table)
+        self.available_tables = [t for t in data_handler.available_tables if t != data_handler.current_table]
+        
+        # Create widgets
+        self.create_widgets()
+        
+    def create_widgets(self):
+        # Instructions
+        ttk.Label(self.dialog, text=f"Base table: {self.data_handler.current_table}", 
+                 font=('TkDefaultFont', 10, 'bold')).grid(row=0, column=0, columnspan=2, padx=10, pady=10)
+        
+        ttk.Label(self.dialog, text="Select tables to join:").grid(row=1, column=0, columnspan=2, padx=10, pady=5)
+        
+        # Table selection
+        self.table_vars = {}
+        row = 2
+        for table in self.available_tables:
+            var = tk.BooleanVar()
+            self.table_vars[table] = var
+            ttk.Checkbutton(self.dialog, text=table, variable=var).grid(row=row, column=0, padx=20, sticky=tk.W)
+            row += 1
+        
+        # Join type
+        ttk.Label(self.dialog, text="Join type:").grid(row=row, column=0, padx=10, pady=(10, 5), sticky=tk.W)
+        self.join_type_var = tk.StringVar(value="inner")
+        join_frame = ttk.Frame(self.dialog)
+        join_frame.grid(row=row+1, column=0, columnspan=2, padx=20)
+        
+        ttk.Radiobutton(join_frame, text="Inner Join", variable=self.join_type_var, value="inner").grid(row=0, column=0)
+        ttk.Radiobutton(join_frame, text="Left Join", variable=self.join_type_var, value="left").grid(row=0, column=1)
+        
+        # Buttons
+        button_frame = ttk.Frame(self.dialog)
+        button_frame.grid(row=row+2, column=0, columnspan=2, pady=20)
+        
+        ttk.Button(button_frame, text="Apply", command=self.apply_join).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.dialog.destroy).grid(row=0, column=1, padx=5)
+        
+    def apply_join(self):
+        """Apply the join configuration"""
+        selected_tables = [table for table, var in self.table_vars.items() if var.get()]
+        
+        if not selected_tables:
+            messagebox.showwarning("Warning", "Please select at least one table to join")
+            return
+        
+        self.result = {
+            'tables': selected_tables,
+            'type': self.join_type_var.get()
+        }
+        self.dialog.destroy()
 
 
 class GlobalFilterDialog:
