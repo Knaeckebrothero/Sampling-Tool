@@ -4,7 +4,14 @@ import random
 import tkinter as tk
 from datetime import datetime
 import json
+import logging
 from collections import defaultdict
+from typing import List, Dict, Optional, Any, Tuple
+from database import Database
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 
 class ColumnType:
@@ -35,53 +42,58 @@ class DimensionalFilter:
         self.filter_config = data.get('filter_config', {})
         return self
 
-    def apply_filter(self, data):
-        """Apply this dimensional filter to the data"""
+    def to_sql_where(self) -> Tuple[str, List[Any]]:
+        """Convert filter to SQL WHERE clause and parameters."""
         if not self.column or not self.filter_config:
-            return data
+            return "", []
 
-        filtered = []
-        for row in data:
-            if self.matches(row):
-                filtered.append(row)
-        return filtered
-
-    def matches(self, row):
-        """Check if a row matches this filter"""
-        value = row.get(self.column)
+        params = []
 
         if self.column_type == ColumnType.TEXT:
             filter_type = self.filter_config.get('type', 'equals')
             if filter_type == 'equals':
                 values = self.filter_config.get('values', [])
-                return not values or str(value) in values
+                if values:
+                    placeholders = ','.join('?' * len(values))
+                    params.extend(values)
+                    return f"{self.column} IN ({placeholders})", params
             elif filter_type == 'contains':
                 pattern = self.filter_config.get('pattern', '')
-                return not pattern or pattern.lower() in str(value).lower()
+                if pattern:
+                    params.append(f"%{pattern}%")
+                    return f"{self.column} LIKE ?", params
 
         elif self.column_type == ColumnType.NUMBER:
-            if value is None:
-                return False
+            clauses = []
             min_val = self.filter_config.get('min')
             max_val = self.filter_config.get('max')
-            if min_val is not None and value < min_val:
-                return False
-            if max_val is not None and value > max_val:
-                return False
-            return True
+
+            if min_val is not None:
+                clauses.append(f"CAST({self.column} AS REAL) >= ?")
+                params.append(min_val)
+            if max_val is not None:
+                clauses.append(f"CAST({self.column} AS REAL) <= ?")
+                params.append(max_val)
+
+            if clauses:
+                return " AND ".join(clauses), params
 
         elif self.column_type == ColumnType.DATE:
-            if value is None:
-                return False
+            clauses = []
             date_from = self.filter_config.get('from')
             date_to = self.filter_config.get('to')
-            if date_from and value < date_from:
-                return False
-            if date_to and value > date_to:
-                return False
-            return True
 
-        return True
+            if date_from:
+                clauses.append(f"{self.column} >= ?")
+                params.append(date_from.strftime('%Y-%m-%d'))
+            if date_to:
+                clauses.append(f"{self.column} <= ?")
+                params.append(date_to.strftime('%Y-%m-%d'))
+
+            if clauses:
+                return " AND ".join(clauses), params
+
+        return "", []
 
     def get_description(self):
         """Get a human-readable description of this filter"""
@@ -148,7 +160,6 @@ class SamplingRule:
 
     def matches(self, row):
         """Check if a row matches this sampling rule"""
-        # Same logic as DimensionalFilter.matches
         value = row.get(self.column)
 
         if self.column_type == ColumnType.TEXT:
@@ -163,30 +174,42 @@ class SamplingRule:
         elif self.column_type == ColumnType.NUMBER:
             if value is None:
                 return False
-            min_val = self.filter_config.get('min')
-            max_val = self.filter_config.get('max')
-            if min_val is not None and value < min_val:
+            try:
+                num_value = float(value) if isinstance(value, str) else value
+                min_val = self.filter_config.get('min')
+                max_val = self.filter_config.get('max')
+                if min_val is not None and num_value < min_val:
+                    return False
+                if max_val is not None and num_value > max_val:
+                    return False
+                return True
+            except:
                 return False
-            if max_val is not None and value > max_val:
-                return False
-            return True
 
         elif self.column_type == ColumnType.DATE:
             if value is None:
                 return False
-            date_from = self.filter_config.get('from')
-            date_to = self.filter_config.get('to')
-            if date_from and value < date_from:
+            try:
+                # Parse date if it's a string
+                if isinstance(value, str):
+                    date_value = datetime.strptime(value, '%Y-%m-%d')
+                else:
+                    date_value = value
+
+                date_from = self.filter_config.get('from')
+                date_to = self.filter_config.get('to')
+                if date_from and date_value < date_from:
+                    return False
+                if date_to and date_value > date_to:
+                    return False
+                return True
+            except:
                 return False
-            if date_to and value > date_to:
-                return False
-            return True
 
         return True
 
     def get_description(self):
         """Get description of the rule criteria"""
-        # Similar to DimensionalFilter but simpler
         if not self.filter_config:
             return "No criteria"
 
@@ -223,9 +246,12 @@ class SamplingRule:
 
 
 class DataHandler:
-    """Handles all data operations and business logic"""
+    """Handles all data operations using database backend"""
 
-    def __init__(self):
+    def __init__(self, db_path: str = "./data/sampling.db"):
+        # Database connection
+        self.db = Database.get_instance(db_path)
+
         # Data storage
         self.data = []
         self.filtered_data = []
@@ -235,12 +261,63 @@ class DataHandler:
         self.sampling_rules = []  # List of SamplingRule objects
         self.results = []
 
-        # CSV settings
-        self.encoding = 'utf-8'
-        self.filename = None
+        # Configuration
+        self.table_name = "kundenstamm"  # Default to main table
+        self.available_tables = self.db.get_production_tables()
+        self.current_table = "kundenstamm"
+        self.join_config = None  # For joined queries
 
         # Make ColumnType accessible
         self.ColumnType = ColumnType
+
+        # Load initial data if available
+        self._initialize_data()
+
+    def _initialize_data(self):
+        """Initialize data from database if available"""
+        try:
+            # Check if tables exist
+            existing_tables = self.db.get_all_tables()
+            if not any(table in existing_tables for table in self.available_tables):
+                log.info("Production tables not found in database")
+                return
+                
+            # Get column information from current table
+            columns = self.db.get_table_columns(self.current_table)
+            if columns:
+                self.column_names = columns
+                self._detect_column_types()
+
+                # Load data
+                self.data = self.db.get_all_data(self.current_table)
+                self.filtered_data = self.data.copy()
+
+                log.info(f"Loaded {len(self.data)} records from {self.current_table}")
+        except Exception as e:
+            log.error(f"Error initializing data: {e}")
+
+    def _detect_column_types(self):
+        """Detect column types from database schema and sample data"""
+        # Get SQL column types
+        sql_types = self.db.get_column_info(self.current_table)
+
+        # Get sample data for better type detection
+        sample_data = self.db.get_sample_data(self.current_table, 100)
+
+        self.column_types = {}
+        for column in self.column_names:
+            sql_type = sql_types.get(column, 'TEXT').upper()
+
+            # Map SQL types to our column types
+            if 'INT' in sql_type or 'REAL' in sql_type or 'NUMERIC' in sql_type:
+                self.column_types[column] = ColumnType.NUMBER
+            elif 'DATE' in sql_type or 'TIME' in sql_type:
+                self.column_types[column] = ColumnType.DATE
+            else:
+                # For TEXT columns, check if they contain dates or numbers
+                values = [row.get(column) for row in sample_data if row.get(column)]
+                detected_type = self.detect_column_type(values)
+                self.column_types[column] = detected_type
 
     def detect_column_type(self, values):
         """Detect the type of a column based on its values"""
@@ -249,9 +326,8 @@ class DataHandler:
 
         # Try to parse as dates
         date_formats = [
-            '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y',  # European formats
-            '%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d',  # ISO formats
-            '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',  # US formats
+            '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y',
+            '%Y/%m/%d', '%Y.%m.%d', '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',
         ]
         date_count = 0
         for value in values[:20]:  # Check first 20 values
@@ -259,7 +335,7 @@ class DataHandler:
                 continue
             for fmt in date_formats:
                 try:
-                    datetime.strptime(value, fmt)
+                    datetime.strptime(str(value), fmt)
                     date_count += 1
                     break
                 except:
@@ -274,8 +350,21 @@ class DataHandler:
             if not value:
                 continue
             try:
-                # Try both comma and dot as decimal separator
-                float(value.replace(',', '.').replace(' ', ''))
+                # Handle both European (1.234,56) and US (1,234.56) formats
+                val_str = str(value)
+                # If it has both . and , determine which is decimal separator
+                if '.' in val_str and ',' in val_str:
+                    # If comma comes after dot, it's decimal separator
+                    if val_str.rindex(',') > val_str.rindex('.'):
+                        val_str = val_str.replace('.', '').replace(',', '.')
+                    else:
+                        # Dot is decimal separator
+                        val_str = val_str.replace(',', '')
+                elif ',' in val_str:
+                    # Only comma - assume it's decimal separator (European)
+                    val_str = val_str.replace(',', '.')
+
+                float(val_str.replace(' ', ''))
                 number_count += 1
             except:
                 pass
@@ -285,76 +374,60 @@ class DataHandler:
 
         return ColumnType.TEXT
 
-    def parse_value(self, value, col_type):
-        """Parse a value based on its column type"""
-        if not value:
-            return None
 
-        if col_type == ColumnType.NUMBER:
-            try:
-                # Remove spaces and convert comma to dot
-                return float(value.replace(',', '.').replace(' ', ''))
-            except:
-                return None
-        elif col_type == ColumnType.DATE:
-            date_formats = [
-                '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y',  # European formats
-                '%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d',  # ISO formats
-                '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',  # US formats
-            ]
-            for fmt in date_formats:
-                try:
-                    return datetime.strptime(value, fmt)
-                except:
-                    pass
-            return None
-        else:
-            return value
-
-    def load_csv(self, filename, delimiter):
-        """Load data from CSV file"""
-        self.filename = filename
-
-        # Read file and detect structure
-        with open(filename, 'r', encoding=self.encoding) as file:
-            # Read a sample to detect column types
-            sample_reader = csv.DictReader(file, delimiter=delimiter)
-            sample_data = []
-            for i, row in enumerate(sample_reader):
-                sample_data.append(row)
-                if i >= 100:  # Read up to 100 rows for type detection
-                    break
-
-            if not sample_data:
-                raise ValueError("No data found in file")
-
-            # Get column names
-            self.column_names = list(sample_data[0].keys())
-
-            # Detect column types
-            self.column_types = {}
-            for column in self.column_names:
-                values = [row[column] for row in sample_data]
-                self.column_types[column] = self.detect_column_type(values)
-
-        # Now read the full file with proper parsing
-        self.data = []
-        with open(filename, 'r', encoding=self.encoding) as file:
-            reader = csv.DictReader(file, delimiter=delimiter)
-            for row in reader:
-                parsed_row = {}
-                for column in self.column_names:
-                    parsed_row[column] = self.parse_value(
-                        row[column],
-                        self.column_types[column]
-                    )
-                self.data.append(parsed_row)
-
-        self.filtered_data = self.data.copy()
+    def refresh_data(self):
+        """Refresh data from database"""
+        self._initialize_data()
 
     def get_filename(self):
-        """Get the base filename"""
-        return os.path.basename(self.filename) if self.filename else "No file selected"
+        """Get current data source description"""
+        return f"Database: {self.current_table} ({len(self.data)} records)"
+    
+    def set_table(self, table_name: str):
+        """Switch to a different table"""
+        if table_name in self.available_tables:
+            self.current_table = table_name
+            self.table_name = table_name
+            self._initialize_data()
+            # Clear filters and results when switching tables
+            self.clear_global_filters()
+            self.clear_sampling_rules()
+            self.clear_results()
+    
+    def set_join_config(self, join_tables: list, join_type: str = "inner"):
+        """Configure joins between tables"""
+        self.join_config = {
+            'tables': join_tables,
+            'type': join_type
+        }
+        # Reload data with joins
+        self._load_joined_data()
+    
+    def _load_joined_data(self):
+        """Load data using configured joins"""
+        if not self.join_config:
+            return
+            
+        try:
+            relationships = self.db.get_table_relationships()
+            join_conditions = relationships.get(self.current_table, {})
+            
+            self.data = self.db.get_joined_data(
+                base_table=self.current_table,
+                join_tables=self.join_config['tables'],
+                join_conditions=join_conditions
+            )
+            
+            # Update column names to include all joined columns
+            if self.data:
+                self.column_names = list(self.data[0].keys())
+                self._detect_column_types()
+                self.filtered_data = self.data.copy()
+                
+            log.info(f"Loaded {len(self.data)} records with joins")
+        except Exception as e:
+            log.error(f"Error loading joined data: {e}")
+            self.join_config = None
 
     def clear_filters_and_rules(self):
         """Clear all filters and rules"""
@@ -383,13 +456,32 @@ class DataHandler:
         self.global_filters = []
 
     def apply_global_filters(self):
-        """Apply all global filters to the data"""
-        # Start with all data
-        self.filtered_data = self.data.copy()
+        """Apply all global filters using SQL queries"""
+        try:
+            # Build WHERE clause from all filters
+            where_clauses = []
+            all_params = []
 
-        # Apply each filter in sequence (AND logic)
-        for filter_obj in self.global_filters:
-            self.filtered_data = filter_obj.apply_filter(self.filtered_data)
+            for filter_obj in self.global_filters:
+                clause, params = filter_obj.to_sql_where()
+                if clause:
+                    where_clauses.append(f"({clause})")
+                    all_params.extend(params)
+
+            # Get filtered data from database
+            if where_clauses:
+                where_clause = " AND ".join(where_clauses)
+                self.filtered_data = self.db.get_filtered_data(
+                    self.table_name, where_clause, tuple(all_params)
+                )
+            else:
+                self.filtered_data = self.data.copy()
+
+            log.info(f"Applied filters: {len(self.filtered_data)} records match")
+
+        except Exception as e:
+            log.error(f"Error applying filters: {e}")
+            self.filtered_data = self.data.copy()
 
     def add_sampling_rule(self, rule):
         """Add a sampling rule"""
@@ -458,80 +550,91 @@ class DataHandler:
         self.results = []
 
     def save_configuration(self, filename):
-        """Save filters and rules to a JSON file"""
-        # Prepare global filters data
-        global_filters_data = []
-        for filter_obj in self.global_filters:
-            filter_dict = filter_obj.to_dict()
-            # Convert datetime objects to strings
-            if filter_obj.column_type == ColumnType.DATE:
-                if filter_dict['filter_config'].get('from'):
-                    filter_dict['filter_config']['from'] = filter_dict['filter_config']['from'].strftime('%Y-%m-%d')
-                if filter_dict['filter_config'].get('to'):
-                    filter_dict['filter_config']['to'] = filter_dict['filter_config']['to'].strftime('%Y-%m-%d')
-            global_filters_data.append(filter_dict)
+        """Save filters and rules to JSON file"""
+        try:
+            # Prepare configuration data
+            config_data = {
+                'column_types': self.column_types,
+                'global_filters': [],
+                'sampling_rules': []
+            }
 
-        # Prepare sampling rules data
-        rules_data = []
-        for rule in self.sampling_rules:
-            rule_dict = rule.to_dict()
-            # Convert datetime objects to strings
-            if rule.column_type == ColumnType.DATE:
-                if rule_dict['filter_config'].get('from'):
-                    rule_dict['filter_config']['from'] = rule_dict['filter_config']['from'].strftime('%Y-%m-%d')
-                if rule_dict['filter_config'].get('to'):
-                    rule_dict['filter_config']['to'] = rule_dict['filter_config']['to'].strftime('%Y-%m-%d')
-            rules_data.append(rule_dict)
+            # Convert filters
+            for filter_obj in self.global_filters:
+                filter_dict = filter_obj.to_dict()
+                # Convert datetime objects to strings
+                if filter_obj.column_type == ColumnType.DATE:
+                    if filter_dict['filter_config'].get('from'):
+                        filter_dict['filter_config']['from'] = filter_dict['filter_config']['from'].strftime('%Y-%m-%d')
+                    if filter_dict['filter_config'].get('to'):
+                        filter_dict['filter_config']['to'] = filter_dict['filter_config']['to'].strftime('%Y-%m-%d')
+                config_data['global_filters'].append(filter_dict)
 
-        save_data = {
-            'column_types': self.column_types,
-            'global_filters': global_filters_data,
-            'sampling_rules': rules_data
-        }
+            # Convert rules
+            for rule in self.sampling_rules:
+                rule_dict = rule.to_dict()
+                # Convert datetime objects to strings
+                if rule.column_type == ColumnType.DATE:
+                    if rule_dict['filter_config'].get('from'):
+                        rule_dict['filter_config']['from'] = rule_dict['filter_config']['from'].strftime('%Y-%m-%d')
+                    if rule_dict['filter_config'].get('to'):
+                        rule_dict['filter_config']['to'] = rule_dict['filter_config']['to'].strftime('%Y-%m-%d')
+                config_data['sampling_rules'].append(rule_dict)
 
-        with open(filename, 'w') as f:
-            json.dump(save_data, f, indent=2)
+            # Save to JSON file
+            with open(filename, 'w') as f:
+                json.dump(config_data, f, indent=2)
+
+            log.info(f"Configuration saved to {filename}")
+
+        except Exception as e:
+            log.error(f"Error saving configuration: {e}")
+            raise
 
     def load_configuration(self, filename):
-        """Load filters and rules from a JSON file"""
-        with open(filename, 'r') as f:
-            save_data = json.load(f)
+        """Load filters and rules from JSON file"""
+        try:
+            # Load from JSON file
+            with open(filename, 'r') as f:
+                save_data = json.load(f)
 
-        saved_column_types = save_data.get('column_types', {})
+            # Load filters
+            self.global_filters = []
+            for filter_dict in save_data.get('global_filters', []):
+                if filter_dict['column'] in self.column_types:
+                    filter_obj = DimensionalFilter()
+                    # Convert date strings back to datetime objects
+                    if filter_dict['column_type'] == ColumnType.DATE:
+                        if filter_dict['filter_config'].get('from'):
+                            filter_dict['filter_config']['from'] = datetime.strptime(
+                                filter_dict['filter_config']['from'], '%Y-%m-%d')
+                        if filter_dict['filter_config'].get('to'):
+                            filter_dict['filter_config']['to'] = datetime.strptime(
+                                filter_dict['filter_config']['to'], '%Y-%m-%d')
+                    filter_obj.from_dict(filter_dict)
+                    self.global_filters.append(filter_obj)
 
-        # Load global filters
-        self.global_filters = []
-        for filter_dict in save_data.get('global_filters', []):
-            if filter_dict['column'] in self.column_types:
-                filter_obj = DimensionalFilter()
-                # Convert date strings back to datetime objects
-                if filter_dict['column_type'] == ColumnType.DATE:
-                    if filter_dict['filter_config'].get('from'):
-                        filter_dict['filter_config']['from'] = datetime.strptime(
-                            filter_dict['filter_config']['from'], '%Y-%m-%d')
-                    if filter_dict['filter_config'].get('to'):
-                        filter_dict['filter_config']['to'] = datetime.strptime(
-                            filter_dict['filter_config']['to'], '%Y-%m-%d')
-                filter_obj.from_dict(filter_dict)
-                self.global_filters.append(filter_obj)
+            # Load sampling rules
+            self.sampling_rules = []
+            for rule_dict in save_data.get('sampling_rules', []):
+                if rule_dict['column'] in self.column_types:
+                    rule = SamplingRule()
+                    # Convert date strings back to datetime objects
+                    if rule_dict['column_type'] == ColumnType.DATE:
+                        if rule_dict['filter_config'].get('from'):
+                            rule_dict['filter_config']['from'] = datetime.strptime(
+                                rule_dict['filter_config']['from'], '%Y-%m-%d')
+                        if rule_dict['filter_config'].get('to'):
+                            rule_dict['filter_config']['to'] = datetime.strptime(
+                                rule_dict['filter_config']['to'], '%Y-%m-%d')
+                    rule.from_dict(rule_dict)
+                    self.sampling_rules.append(rule)
 
-        # Load sampling rules
-        self.sampling_rules = []
-        for rule_dict in save_data.get('sampling_rules', []):
-            if rule_dict['column'] in self.column_types:
-                rule = SamplingRule()
-                # Convert date strings back to datetime objects
-                if rule_dict['column_type'] == ColumnType.DATE:
-                    if rule_dict['filter_config'].get('from'):
-                        rule_dict['filter_config']['from'] = datetime.strptime(
-                            rule_dict['filter_config']['from'], '%Y-%m-%d')
-                    if rule_dict['filter_config'].get('to'):
-                        rule_dict['filter_config']['to'] = datetime.strptime(
-                            rule_dict['filter_config']['to'], '%Y-%m-%d')
-                rule.from_dict(rule_dict)
-                self.sampling_rules.append(rule)
+            return len(self.global_filters), len(self.sampling_rules)
 
-        return len(self.global_filters), len(self.sampling_rules)
+        except Exception as e:
+            log.error(f"Error loading configuration: {e}")
+            raise
 
     def export_results(self, filename, delimiter):
         """Export all sample results to CSV"""
@@ -551,7 +654,10 @@ class DataHandler:
                     elif self.column_types[col] == ColumnType.NUMBER:
                         row[col] = str(value).replace('.', ',')
                     elif self.column_types[col] == ColumnType.DATE:
-                        row[col] = value.strftime('%d-%m-%Y')
+                        if isinstance(value, str):
+                            row[col] = value
+                        else:
+                            row[col] = value.strftime('%d-%m-%Y')
                     else:
                         row[col] = str(value)
                 writer.writerow(row)
@@ -583,7 +689,10 @@ class DataHandler:
                         elif self.column_types[col] == ColumnType.NUMBER:
                             row[col] = str(value).replace('.', ',')
                         elif self.column_types[col] == ColumnType.DATE:
-                            row[col] = value.strftime('%d-%m-%Y')
+                            if isinstance(value, str):
+                                row[col] = value
+                            else:
+                                row[col] = value.strftime('%d-%m-%Y')
                         else:
                             row[col] = str(value)
                     writer.writerow(row)
@@ -594,16 +703,16 @@ class DataHandler:
 def main():
     """Main entry point"""
     # Import UI module
-    from ui_tkinter import HybridSampleTestingApp
+    from ui_tkinter import SimpleSampleTestingApp
 
     # Create root window
     root = tk.Tk()
 
-    # Create data handler
+    # Create data handler with database backend
     data_handler = DataHandler()
 
     # Create and run app
-    app = HybridSampleTestingApp(root, data_handler)
+    app = SimpleSampleTestingApp(root, data_handler)
     root.mainloop()
 
 
