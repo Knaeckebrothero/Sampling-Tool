@@ -262,8 +262,10 @@ class DataHandler:
         self.results = []
 
         # Configuration
-        self.table_name = "financial_data"
-        self.current_config_id = None
+        self.table_name = "kundenstamm"  # Default to main table
+        self.available_tables = self.db.get_production_tables()
+        self.current_table = "kundenstamm"
+        self.join_config = None  # For joined queries
 
         # Make ColumnType accessible
         self.ColumnType = ColumnType
@@ -274,27 +276,33 @@ class DataHandler:
     def _initialize_data(self):
         """Initialize data from database if available"""
         try:
-            # Get column information
-            columns = self.db.get_table_columns(self.table_name)
+            # Check if tables exist
+            existing_tables = self.db.get_all_tables()
+            if not any(table in existing_tables for table in self.available_tables):
+                log.info("Production tables not found in database")
+                return
+                
+            # Get column information from current table
+            columns = self.db.get_table_columns(self.current_table)
             if columns:
                 self.column_names = columns
                 self._detect_column_types()
 
                 # Load data
-                self.data = self.db.get_all_data(self.table_name)
+                self.data = self.db.get_all_data(self.current_table)
                 self.filtered_data = self.data.copy()
 
-                log.info(f"Loaded {len(self.data)} records from database")
+                log.info(f"Loaded {len(self.data)} records from {self.current_table}")
         except Exception as e:
             log.error(f"Error initializing data: {e}")
 
     def _detect_column_types(self):
         """Detect column types from database schema and sample data"""
         # Get SQL column types
-        sql_types = self.db.get_column_info(self.table_name)
+        sql_types = self.db.get_column_info(self.current_table)
 
         # Get sample data for better type detection
-        sample_data = self.db.get_sample_data(self.table_name, 100)
+        sample_data = self.db.get_sample_data(self.current_table, 100)
 
         self.column_types = {}
         for column in self.column_names:
@@ -342,8 +350,21 @@ class DataHandler:
             if not value:
                 continue
             try:
-                # Try both comma and dot as decimal separator
-                float(str(value).replace(',', '.').replace(' ', ''))
+                # Handle both European (1.234,56) and US (1,234.56) formats
+                val_str = str(value)
+                # If it has both . and , determine which is decimal separator
+                if '.' in val_str and ',' in val_str:
+                    # If comma comes after dot, it's decimal separator
+                    if val_str.rindex(',') > val_str.rindex('.'):
+                        val_str = val_str.replace('.', '').replace(',', '.')
+                    else:
+                        # Dot is decimal separator
+                        val_str = val_str.replace(',', '')
+                elif ',' in val_str:
+                    # Only comma - assume it's decimal separator (European)
+                    val_str = val_str.replace(',', '.')
+
+                float(val_str.replace(' ', ''))
                 number_count += 1
             except:
                 pass
@@ -353,20 +374,6 @@ class DataHandler:
 
         return ColumnType.TEXT
 
-    def load_csv(self, filename, delimiter):
-        """Import CSV data into database (for migration purposes)"""
-        try:
-            # Import CSV to database
-            self.db.import_csv_data(filename, self.table_name, truncate=True)
-
-            # Reinitialize data
-            self._initialize_data()
-
-            log.info(f"Imported data from {filename}")
-
-        except Exception as e:
-            log.error(f"Error importing CSV: {e}")
-            raise
 
     def refresh_data(self):
         """Refresh data from database"""
@@ -374,7 +381,53 @@ class DataHandler:
 
     def get_filename(self):
         """Get current data source description"""
-        return f"Database: {self.table_name} ({len(self.data)} records)"
+        return f"Database: {self.current_table} ({len(self.data)} records)"
+    
+    def set_table(self, table_name: str):
+        """Switch to a different table"""
+        if table_name in self.available_tables:
+            self.current_table = table_name
+            self.table_name = table_name
+            self._initialize_data()
+            # Clear filters and results when switching tables
+            self.clear_global_filters()
+            self.clear_sampling_rules()
+            self.clear_results()
+    
+    def set_join_config(self, join_tables: list, join_type: str = "inner"):
+        """Configure joins between tables"""
+        self.join_config = {
+            'tables': join_tables,
+            'type': join_type
+        }
+        # Reload data with joins
+        self._load_joined_data()
+    
+    def _load_joined_data(self):
+        """Load data using configured joins"""
+        if not self.join_config:
+            return
+            
+        try:
+            relationships = self.db.get_table_relationships()
+            join_conditions = relationships.get(self.current_table, {})
+            
+            self.data = self.db.get_joined_data(
+                base_table=self.current_table,
+                join_tables=self.join_config['tables'],
+                join_conditions=join_conditions
+            )
+            
+            # Update column names to include all joined columns
+            if self.data:
+                self.column_names = list(self.data[0].keys())
+                self._detect_column_types()
+                self.filtered_data = self.data.copy()
+                
+            log.info(f"Loaded {len(self.data)} records with joins")
+        except Exception as e:
+            log.error(f"Error loading joined data: {e}")
+            self.join_config = None
 
     def clear_filters_and_rules(self):
         """Clear all filters and rules"""
@@ -490,15 +543,6 @@ class DataHandler:
             else:
                 rule_results.append(f"{rule.name}: 0 samples (no matches)")
 
-        # Save results to database if configuration exists
-        if self.current_config_id and self.results:
-            summary = {
-                'rules': rule_results,
-                'total_filtered': len(self.filtered_data),
-                'total_sampled': len(self.results)
-            }
-            self.db.save_sampling_results(self.current_config_id, self.results, summary)
-
         return rule_results
 
     def clear_results(self):
@@ -506,7 +550,7 @@ class DataHandler:
         self.results = []
 
     def save_configuration(self, filename):
-        """Save filters and rules to database"""
+        """Save filters and rules to JSON file"""
         try:
             # Prepare configuration data
             config_data = {
@@ -537,47 +581,22 @@ class DataHandler:
                         rule_dict['filter_config']['to'] = rule_dict['filter_config']['to'].strftime('%Y-%m-%d')
                 config_data['sampling_rules'].append(rule_dict)
 
-            # Extract configuration name from filename
-            config_name = os.path.splitext(os.path.basename(filename))[0]
+            # Save to JSON file
+            with open(filename, 'w') as f:
+                json.dump(config_data, f, indent=2)
 
-            # Save to database
-            self.current_config_id = self.db.save_configuration(
-                config_name,
-                config_data,
-                f"Configuration saved from file: {filename}"
-            )
-
-            log.info(f"Configuration saved to database as '{config_name}'")
+            log.info(f"Configuration saved to {filename}")
 
         except Exception as e:
             log.error(f"Error saving configuration: {e}")
             raise
 
     def load_configuration(self, filename):
-        """Load filters and rules from database"""
+        """Load filters and rules from JSON file"""
         try:
-            # For compatibility, check if it's a file path or configuration name
-            if os.path.exists(filename):
-                # Load from JSON file
-                with open(filename, 'r') as f:
-                    save_data = json.load(f)
-            else:
-                # Try to load from database by name
-                configs = self.db.list_configurations()
-                config_name = os.path.splitext(os.path.basename(filename))[0]
-
-                config_id = None
-                for config in configs:
-                    if config['name'] == config_name:
-                        config_id = config['id']
-                        break
-
-                if not config_id:
-                    raise ValueError(f"Configuration '{config_name}' not found in database")
-
-                config = self.db.load_configuration(config_id)
-                save_data = config['config_data']
-                self.current_config_id = config_id
+            # Load from JSON file
+            with open(filename, 'r') as f:
+                save_data = json.load(f)
 
             # Load filters
             self.global_filters = []
@@ -680,19 +699,11 @@ class DataHandler:
 
         return len(results_by_rule)
 
-    def get_configurations_list(self) -> List[Dict]:
-        """Get list of saved configurations from database"""
-        return self.db.list_configurations()
-
-    def get_sampling_history(self) -> List[Dict]:
-        """Get sampling history from database"""
-        return self.db.get_sampling_history()
-
 
 def main():
     """Main entry point"""
     # Import UI module
-    from ui_tkinter import HybridSampleTestingApp
+    from ui_tkinter import SimpleSampleTestingApp
 
     # Create root window
     root = tk.Tk()
@@ -701,7 +712,7 @@ def main():
     data_handler = DataHandler()
 
     # Create and run app
-    app = HybridSampleTestingApp(root, data_handler)
+    app = SimpleSampleTestingApp(root, data_handler)
     root.mainloop()
 
 

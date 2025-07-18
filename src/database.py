@@ -1,43 +1,20 @@
 import os
 import sqlite3
 import logging
-import json
 import pandas as pd
-from typing import Optional, Union, List, Tuple, Any, Dict
-from datetime import datetime
-
+from typing import Optional, List, Dict, Any
 
 # Set up logging
 log = logging.getLogger(__name__)
 
 
-class Singleton:
+class Database:
     """
-    Ensures that a class has only one instance and provides a global point of access to that instance.
-    """
-    _instance = None
-
-    @classmethod
-    def get_instance(cls, *args, **kwargs):
-        """
-        Provides a thread-safe singleton instance of the class.
-        """
-        if cls._instance is None:
-            cls._instance = cls(*args, **kwargs)
-        return cls._instance
-
-
-class Database(Singleton):
-    """
-    Manage SQLite database interactions for the sampling tool.
+    Simplified database manager for the sampling tool.
     """
 
     def __init__(self, db_path: str = "./data/sampling.db"):
-        """
-        Initialize database connection.
-
-        :param db_path: Path to the SQLite database file
-        """
+        """Initialize database connection."""
         log.debug("Initializing database connection...")
         self._path = db_path
         self._conn: Optional[sqlite3.Connection] = None
@@ -45,13 +22,8 @@ class Database(Singleton):
         self.connect()
         log.info("Database initialized.")
 
-    def __del__(self):
-        """Clean up database connection on object destruction."""
-        self.close()
-        log.debug("Database object destroyed.")
-
     def connect(self):
-        """Establish connection to the database and verify schema."""
+        """Establish connection to the database."""
         try:
             # Ensure directory exists
             os.makedirs(os.path.dirname(self._path), exist_ok=True)
@@ -62,11 +34,51 @@ class Database(Singleton):
             self.cursor = self._conn.cursor()
             log.info(f"Connected to database at {self._path}")
 
-            # Verify required tables exist
-            self._verify_tables()
+            # Create table if it doesn't exist
+            self._create_table()
 
         except sqlite3.Error as e:
             log.error(f"Failed to connect to database: {e}")
+            raise
+
+    def _create_table(self):
+        """Create the database tables if they don't exist."""
+        try:
+            # Read and execute schema.sql
+            schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+            if os.path.exists(schema_path):
+                with open(schema_path, 'r') as f:
+                    schema = f.read()
+                    # SQLite doesn't support UNIQUEIDENTIFIER, replace with TEXT
+                    schema = schema.replace('UNIQUEIDENTIFIER', 'TEXT')
+                    # SQLite doesn't support NVARCHAR, replace with TEXT
+                    schema = schema.replace('NVARCHAR', 'VARCHAR')
+                    # Execute the schema
+                    self.cursor.executescript(schema)
+                    self._conn.commit()
+                    log.info("Database schema created/updated from schema.sql")
+            else:
+                # Fallback: create minimal tables
+                log.warning("schema.sql not found, creating minimal tables")
+                self.cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS kundenstamm (
+                        pk TEXT PRIMARY KEY
+                    )
+                """)
+                self.cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS softfact_vw (
+                        pk TEXT PRIMARY KEY
+                    )
+                """)
+                self.cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS kontodaten_vw (
+                        pk TEXT PRIMARY KEY
+                    )
+                """)
+                self._conn.commit()
+                log.debug("Created minimal table structure")
+        except sqlite3.Error as e:
+            log.error(f"Error creating tables: {e}")
             raise
 
     def close(self):
@@ -75,411 +87,197 @@ class Database(Singleton):
             self._conn.close()
             log.debug("Database connection closed.")
 
-    def _verify_tables(self, required_tables: List[str] = None):
-        """
-        Verify that required tables exist in the database.
-
-        :param required_tables: List of required table names
-        :raises RuntimeError: If required tables are missing
-        """
-        if required_tables is None:
-            # Define required tables for the sampling tool
-            required_tables = ['financial_data', 'configurations', 'sampling_results', 'sampling_history']
-
-        try:
-            self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            existing_tables = [row[0] for row in self.cursor.fetchall()]
-
-            missing_tables = [table for table in required_tables if table not in existing_tables]
-            if missing_tables:
-                log.error(f"Required tables are missing: {missing_tables}")
-                log.error("Please run the database initialization script first!")
-                raise RuntimeError(f"Required tables are missing: {missing_tables}")
-            else:
-                log.debug(f"All required tables exist: {required_tables}")
-
-        except sqlite3.Error as e:
-            log.error(f"Error verifying tables: {e}")
-            raise
-
-    def query(self, query: str, params: Optional[Union[tuple, list]] = None) -> List[sqlite3.Row]:
-        """
-        Execute a SELECT query and return results.
-
-        :param query: SQL query string
-        :param params: Query parameters
-        :return: List of rows
-        """
-        try:
-            if params:
-                log.debug(f"Executing query: {query} with params: {params}")
-                self.cursor.execute(query, params)
-            else:
-                log.debug(f"Executing query: {query}")
-                self.cursor.execute(query)
-
-            result = self.cursor.fetchall()
-            log.debug(f"Query returned {len(result)} records")
-            return result
-
-        except sqlite3.Error as e:
-            log.error(f"Error executing query: {e}")
-            log.debug(f"Query was: {query}")
-            if params:
-                log.debug(f"Params were: {params}")
-            raise
-
-    def insert(self, query: str, params: Optional[Any] = None) -> int:
-        """
-        Execute an INSERT query and return the last inserted row ID.
-
-        :param query: SQL insert query
-        :param params: Query parameters
-        :return: ID of the last inserted row
-        """
-        try:
-            if params:
-                log.debug(f"Executing insert: {query} with params: {params}")
-                self.cursor.execute(query, params)
-            else:
-                log.debug(f"Executing insert: {query}")
-                self.cursor.execute(query)
-
-            self._conn.commit()
-            return self.cursor.lastrowid
-
-        except sqlite3.Error as e:
-            log.error(f"Error executing insert: {e}")
-            self._conn.rollback()
-            raise
-
-    def update(self, query: str, params: Optional[Any] = None) -> int:
-        """
-        Execute an UPDATE query and return the number of affected rows.
-
-        :param query: SQL update query
-        :param params: Query parameters
-        :return: Number of affected rows
-        """
-        try:
-            if params:
-                self.cursor.execute(query, params)
-            else:
-                self.cursor.execute(query)
-
-            self._conn.commit()
-            return self.cursor.rowcount
-
-        except sqlite3.Error as e:
-            log.error(f"Error executing update: {e}")
-            self._conn.rollback()
-            raise
-
-    def delete(self, query: str, params: Optional[Any] = None) -> int:
-        """
-        Execute a DELETE query and return the number of affected rows.
-
-        :param query: SQL delete query
-        :param params: Query parameters
-        :return: Number of affected rows
-        """
-        try:
-            if params:
-                self.cursor.execute(query, params)
-            else:
-                self.cursor.execute(query)
-
-            self._conn.commit()
-            return self.cursor.rowcount
-
-        except sqlite3.Error as e:
-            log.error(f"Error executing delete: {e}")
-            self._conn.rollback()
-            raise
-
-    def execute_script(self, script: str):
-        """
-        Execute a SQL script (multiple statements).
-
-        :param script: SQL script
-        """
-        try:
-            self._conn.executescript(script)
-            self._conn.commit()
-            log.debug("Script executed successfully")
-
-        except sqlite3.Error as e:
-            log.error(f"Error executing script: {e}")
-            self._conn.rollback()
-            raise
-
-    # ===== Sampling Tool Specific Methods =====
-
-    def get_table_columns(self, table_name: str = "financial_data") -> List[str]:
-        """
-        Get column names for a table.
-
-        :param table_name: Name of the table
-        :return: List of column names
-        """
+    def get_table_columns(self, table_name: str = "kundenstamm") -> List[str]:
+        """Get column names for a table."""
         query = f"PRAGMA table_info({table_name})"
-        result = self.query(query)
-        return [row['name'] for row in result if row['name'] != 'id']
+        result = self.cursor.execute(query).fetchall()
+        columns = [row['name'] for row in result if row['name'] not in ['index']]
+        log.debug(f"Table columns: {columns}")
+        return columns
 
-    def get_column_info(self, table_name: str = "financial_data") -> Dict[str, str]:
-        """
-        Get column information including data types.
-
-        :param table_name: Name of the table
-        :return: Dictionary of column names to SQL types
-        """
+    def get_column_info(self, table_name: str = "kundenstamm") -> Dict[str, str]:
+        """Get column information including data types."""
         query = f"PRAGMA table_info({table_name})"
-        result = self.query(query)
-        return {row['name']: row['type'] for row in result if row['name'] != 'id'}
+        result = self.cursor.execute(query).fetchall()
+        return {row['name']: row['type'] for row in result if row['name'] not in ['index']}
 
-    def get_all_data(self, table_name: str = "financial_data", limit: Optional[int] = None) -> List[Dict]:
-        """
-        Retrieve all data from the main table.
-
-        :param table_name: Name of the table
-        :param limit: Optional limit on number of records
-        :return: List of dictionaries containing the data
-        """
+    def get_all_data(self, table_name: str = "kundenstamm", limit: Optional[int] = None) -> List[Dict]:
+        """Retrieve all data from the table."""
         query = f"SELECT * FROM {table_name}"
         if limit:
             query += f" LIMIT {limit}"
 
-        result = self.query(query)
+        result = self.cursor.execute(query).fetchall()
         return [dict(row) for row in result]
 
-    def get_sample_data(self, table_name: str = "financial_data", limit: int = 100) -> List[Dict]:
-        """
-        Get a sample of data for preview/type detection.
-
-        :param table_name: Name of the table
-        :param limit: Number of rows to retrieve
-        :return: List of dictionaries
-        """
+    def get_sample_data(self, table_name: str = "kundenstamm", limit: int = 100) -> List[Dict]:
+        """Get a sample of data for preview/type detection."""
         return self.get_all_data(table_name, limit)
 
-    def get_filtered_data(self, table_name: str = "financial_data",
-                         where_clause: str = "", params: Optional[tuple] = None) -> List[Dict]:
-        """
-        Get filtered data based on WHERE clause.
-
-        :param table_name: Name of the table
-        :param where_clause: SQL WHERE clause (without WHERE keyword)
-        :param params: Query parameters
-        :return: List of dictionaries
-        """
+    def get_filtered_data(self, table_name: str = "kundenstamm",
+                          where_clause: str = "", params: Optional[tuple] = None) -> List[Dict]:
+        """Get filtered data based on WHERE clause."""
         query = f"SELECT * FROM {table_name}"
         if where_clause:
             query += f" WHERE {where_clause}"
 
-        result = self.query(query, params)
+        if params:
+            result = self.cursor.execute(query, params).fetchall()
+        else:
+            result = self.cursor.execute(query).fetchall()
+
         return [dict(row) for row in result]
 
-    def get_distinct_values(self, column: str, table_name: str = "financial_data",
-                           limit: int = 100) -> List[Any]:
-        """
-        Get distinct values for a column.
-
-        :param column: Column name
-        :param table_name: Table name
-        :param limit: Maximum number of distinct values
-        :return: List of distinct values
-        """
-        query = f"SELECT DISTINCT {column} FROM {table_name} WHERE {column} IS NOT NULL ORDER BY {column} LIMIT ?"
-        result = self.query(query, (limit,))
-        return [row[column] for row in result]
-
-    def get_row_count(self, table_name: str = "financial_data",
-                     where_clause: str = "", params: Optional[tuple] = None) -> int:
-        """
-        Get count of rows, optionally with filter.
-
-        :param table_name: Table name
-        :param where_clause: Optional WHERE clause
-        :param params: Query parameters
-        :return: Row count
-        """
+    def get_row_count(self, table_name: str = "kundenstamm") -> int:
+        """Get count of rows."""
         query = f"SELECT COUNT(*) as count FROM {table_name}"
-        if where_clause:
-            query += f" WHERE {where_clause}"
+        result = self.cursor.execute(query).fetchone()
+        return result['count'] if result else 0
 
-        result = self.query(query, params)
-        return result[0]['count'] if result else 0
-
-    def save_configuration(self, name: str, config_data: dict, description: str = "") -> int:
-        """
-        Save a sampling configuration (filters and rules).
-
-        :param name: Configuration name
-        :param config_data: Dictionary containing filters and rules
-        :param description: Optional description
-        :return: ID of saved configuration
-        """
-        query = """
-        INSERT INTO configurations (name, description, config_json, created_at)
-        VALUES (?, ?, ?, ?)
-        """
-        return self.insert(query, (
-            name,
-            description,
-            json.dumps(config_data),
-            datetime.now().isoformat()
-        ))
-
-    def load_configuration(self, config_id: int) -> Optional[Dict]:
-        """
-        Load a saved configuration.
-
-        :param config_id: Configuration ID
-        :return: Configuration data or None
-        """
-        query = "SELECT * FROM configurations WHERE id = ?"
-        result = self.query(query, (config_id,))
-
-        if result:
-            row = dict(result[0])
-            row['config_data'] = json.loads(row['config_json'])
-            return row
-        return None
-
-    def list_configurations(self) -> List[Dict]:
-        """
-        List all saved configurations.
-
-        :return: List of configuration summaries
-        """
-        query = """
-        SELECT id, name, description, created_at, updated_at
-        FROM configurations
-        ORDER BY updated_at DESC
-        """
-        result = self.query(query)
-        return [dict(row) for row in result]
-
-    def save_sampling_results(self, config_id: int, results: List[Dict],
-                            summary: Dict) -> int:
-        """
-        Save sampling results.
-
-        :param config_id: Configuration ID used for sampling
-        :param results: List of sampled records
-        :param summary: Summary information
-        :return: Sampling history ID
-        """
-        # Insert into sampling history
-        history_query = """
-        INSERT INTO sampling_history (config_id, sample_count, summary_json, created_at)
-        VALUES (?, ?, ?, ?)
-        """
-        history_id = self.insert(history_query, (
-            config_id,
-            len(results),
-            json.dumps(summary),
-            datetime.now().isoformat()
-        ))
-
-        # Insert individual results
-        if results:
-            for result in results:
-                result_query = """
-                INSERT INTO sampling_results (history_id, rule_name, data_json)
-                VALUES (?, ?, ?)
-                """
-                # Extract rule name and prepare data
-                rule_name = result.get('_rule_name', 'Unknown')
-                data = {k: v for k, v in result.items() if k != '_rule_name'}
-
-                self.insert(result_query, (
-                    history_id,
-                    rule_name,
-                    json.dumps(data, default=str)  # Convert dates/objects to strings
-                ))
-
-        return history_id
-
-    def get_sampling_history(self, limit: int = 50) -> List[Dict]:
-        """
-        Get sampling history.
-
-        :param limit: Number of recent entries to retrieve
-        :return: List of sampling history entries
-        """
-        query = """
-        SELECT sh.*, c.name as config_name
-        FROM sampling_history sh
-        LEFT JOIN configurations c ON sh.config_id = c.id
-        ORDER BY sh.created_at DESC
-        LIMIT ?
-        """
-        result = self.query(query, (limit,))
-        return [dict(row) for row in result]
-
-    def get_sampling_results(self, history_id: int) -> List[Dict]:
-        """
-        Get results for a specific sampling run.
-
-        :param history_id: Sampling history ID
-        :return: List of sampling results
-        """
-        query = """
-        SELECT * FROM sampling_results
-        WHERE history_id = ?
-        ORDER BY id
-        """
-        result = self.query(query, (history_id,))
-
-        results = []
-        for row in result:
-            data = json.loads(row['data_json'])
-            data['_rule_name'] = row['rule_name']
-            results.append(data)
-
-        return results
-
-    def import_csv_data(self, csv_path: str, table_name: str = "financial_data",
-                       truncate: bool = False):
-        """
-        Import data from CSV file into the database.
-
-        :param csv_path: Path to CSV file
-        :param table_name: Target table name
-        :param truncate: Whether to clear existing data first
-        """
+    def import_csv_data(self, csv_path: str, table_name: str = "kundenstamm",
+                        delimiter: str = ';', truncate: bool = False):
+        """Import data from CSV file into the database."""
         try:
-            if truncate:
-                self.delete(f"DELETE FROM {table_name}")
-                log.info(f"Truncated table {table_name}")
+            # Read CSV with pandas
+            df = pd.read_csv(csv_path, delimiter=delimiter)
+            log.info(f"Read {len(df)} rows from CSV file")
+            log.info(f"Original columns: {list(df.columns)}")
 
-            df = pd.read_csv(csv_path, delimiter=';')  # Assuming semicolon delimiter
-            df.to_sql(table_name, self._conn, if_exists='append', index=False)
-            log.info(f"Imported {len(df)} records from {csv_path} to {table_name}")
+            # Clean column names - remove spaces and special characters
+            original_columns = list(df.columns)
+            df.columns = [col.strip().replace(' ', '_').replace('-', '_') for col in df.columns]
+            log.info(f"Cleaned columns: {list(df.columns)}")
+
+            # Create a copy for conversion
+            df_converted = df.copy()
+
+            # Convert European number format (comma as decimal separator) to standard format
+            for col in df_converted.columns:
+                if df_converted[col].dtype == 'object':
+                    # Check if this looks like numeric data
+                    sample_values = df_converted[col].dropna().head(5)
+
+                    # Check for numeric pattern
+                    numeric_pattern_found = False
+                    for val in sample_values:
+                        if isinstance(val, str) and any(c.isdigit() for c in val):
+                            if ',' in val or '.' in val:
+                                numeric_pattern_found = True
+                                break
+
+                    if numeric_pattern_found:
+                        try:
+                            # Convert European format
+                            converted_series = df_converted[col].apply(lambda x:
+                                                                       str(x).replace('.', '').replace(',', '.') if isinstance(x, str) else x
+                                                                       )
+
+                            # Try to convert to numeric
+                            converted_numeric = pd.to_numeric(converted_series, errors='coerce')
+
+                            # Only use if we converted some values successfully
+                            if converted_numeric.notna().any():
+                                df_converted[col] = converted_numeric
+                                log.info(f"Converted column '{col}' to numeric")
+                        except Exception as e:
+                            log.warning(f"Could not convert column '{col}': {e}")
+
+            # Drop the existing table if truncate is True
+            if truncate:
+                self.cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                self._conn.commit()
+                log.info(f"Dropped existing table {table_name}")
+
+            # Import to database
+            df_converted.to_sql(table_name, self._conn, if_exists='replace', index=False)
+            self._conn.commit()
+
+            # Verify the import
+            self.cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count = self.cursor.fetchone()[0]
+            log.info(f"Successfully imported {count} records to {table_name}")
+
+            # Log table structure
+            self.cursor.execute(f"PRAGMA table_info({table_name})")
+            columns = self.cursor.fetchall()
+            log.info(f"Table now has {len(columns)} columns")
+
+            if count == 0:
+                log.error("Warning: Table was created but no data was imported!")
+                # Try to debug
+                self.cursor.execute(f"SELECT * FROM {table_name} LIMIT 1")
+                sample = self.cursor.fetchone()
+                log.info(f"Sample row: {sample}")
 
         except Exception as e:
             log.error(f"Error importing CSV data: {e}")
+            import traceback
+            log.error(traceback.format_exc())
             raise
 
-    def get_column_statistics(self, column: str, table_name: str = "financial_data") -> Dict:
-        """
-        Get statistics for a numeric column.
-
-        :param column: Column name
-        :param table_name: Table name
-        :return: Dictionary with min, max, avg, count
-        """
-        query = f"""
-        SELECT
-            MIN(CAST({column} AS REAL)) as min_val,
-            MAX(CAST({column} AS REAL)) as max_val,
-            AVG(CAST({column} AS REAL)) as avg_val,
-            COUNT(*) as count
-        FROM {table_name}
-        WHERE {column} IS NOT NULL
-        """
-        result = self.query(query)
-        if result:
-            return dict(result[0])
-        return {}
+    def get_all_tables(self) -> List[str]:
+        """Get list of all tables in the database."""
+        query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        result = self.cursor.execute(query).fetchall()
+        return [row['name'] for row in result]
+    
+    def get_production_tables(self) -> List[str]:
+        """Get list of the three production tables."""
+        return ['kundenstamm', 'softfact_vw', 'kontodaten_vw']
+    
+    def get_joined_data(self, base_table: str = "kundenstamm", 
+                       join_tables: Optional[List[str]] = None,
+                       join_conditions: Optional[Dict[str, str]] = None,
+                       where_clause: str = "", 
+                       params: Optional[tuple] = None,
+                       limit: Optional[int] = None) -> List[Dict]:
+        """Get data with joins across multiple tables."""
+        query = f"SELECT * FROM {base_table}"
+        
+        # Add joins if specified
+        if join_tables and join_conditions:
+            for table in join_tables:
+                if table in join_conditions:
+                    query += f" LEFT JOIN {table} ON {join_conditions[table]}"
+        
+        # Add where clause
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        
+        # Add limit
+        if limit:
+            query += f" LIMIT {limit}"
+        
+        # Execute query
+        if params:
+            result = self.cursor.execute(query, params).fetchall()
+        else:
+            result = self.cursor.execute(query).fetchall()
+        
+        return [dict(row) for row in result]
+    
+    def get_table_relationships(self) -> Dict[str, Dict[str, str]]:
+        """Get common join relationships between tables."""
+        return {
+            'kundenstamm': {
+                'softfact_vw': 'kundenstamm.kundennummer = softfact_vw.kundennummer AND kundenstamm.banknummer = softfact_vw.banknummer',
+                'kontodaten_vw': 'kundenstamm.personennummer_pseudonym = kontodaten_vw.personennummer_pseudonym AND kundenstamm.banknummer = kontodaten_vw.banknummer'
+            },
+            'softfact_vw': {
+                'kontodaten_vw': 'softfact_vw.personennummer_pseudonym = kontodaten_vw.personennummer_pseudonym'
+            }
+        }
+    
+    def verify_table_structure(self, table_name: str, expected_columns: List[str]) -> bool:
+        """Verify that a table has the expected columns."""
+        actual_columns = self.get_table_columns(table_name)
+        missing = set(expected_columns) - set(actual_columns)
+        if missing:
+            log.warning(f"Table {table_name} is missing columns: {missing}")
+            return False
+        return True
+    
+    @classmethod
+    def get_instance(cls, db_path: str = "./data/sampling.db"):
+        """Simple factory method to get database instance."""
+        return cls(db_path)

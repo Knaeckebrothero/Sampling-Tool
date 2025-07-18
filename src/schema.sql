@@ -1,80 +1,104 @@
--- Database schema for the sampling tool
+-- Database schema for the sampling tool with production-like structure
+-- Three main tables matching the production database schema
 
--- Main data table for financial records
--- This is a flexible schema that can accommodate various CSV structures
--- In practice, you might want to define specific columns based on your data
-CREATE TABLE IF NOT EXISTS financial_data (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- Add your specific columns here based on your CSV structure
-    -- Example columns (adjust based on your actual data):
-    transaction_id TEXT,
-    account_number TEXT,
-    transaction_date DATE,
-    amount REAL,
-    currency TEXT,
-    description TEXT,
-    category TEXT,
-    vendor TEXT,
-    department TEXT,
-    cost_center TEXT,
-    project_code TEXT,
-    approval_status TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+-- Table 1: Kundenstamm (Customer Master Data)
+CREATE TABLE IF NOT EXISTS kundenstamm (
+    pk NVARCHAR(152) PRIMARY KEY,
+    banknummer VARCHAR(20),
+    kundennummer VARCHAR(20),
+    stichtag DATE,
+    personennummer_pseudonym BIGINT,
+    kundennummer_fusionierter_kunde VARCHAR(20),
+    banknummer_fusionierter_kunde VARCHAR(20),
+    art_kundenstammvertrag INT,
+    geburtsdatum_gruendungsdatum_pseudonym BIGINT,
+    geburtsort_pseudonym BIGINT,
+    person_angelegt_am DATE,
+    rechtsform DECIMAL(29),
+    rechtsformauspraegung DECIMAL(3),
+    rechtsform_binaer VARCHAR(25),
+    rechtsformauspraegung_beschreibung_1 VARCHAR(200),
+    rechtsformauspraegung_beschreibung_2 VARCHAR(400),
+    grundform VARCHAR(25),
+    staatsangehoerigkeit_nationalitaet_bezeichnung_pseudonym BIGINT,
+    ausstellende_behoerde_ausweis VARCHAR(50),
+    ausstellungsdatum_ausweis DATE,
+    ausweisart VARCHAR(40),
+    ausweiskopie_vorhanden CHAR(1),
+    ausweisnummer_pseudonym BIGINT,
+    eingetragen_am DATE,
+    gueltig_bis_ausweis DATE,
+    legitimation_geprueft_am DATE,
+    legitimationsverfahren VARCHAR(25),
+    ort_registergericht VARCHAR(32),
+    registerart DECIMAL(3),
+    registernummer_pseudonym BIGINT,
+    vorname_fuer_par_24c_kwg_pseudonym BIGINT,
+    nachname_fuer_par_24c_kwg_pseudonym BIGINT,
+    firmenname_fuer_par_24c_kwg_pseudonym BIGINT,
+    nachname_pseudonym BIGINT,
+    vorname_pseudonym BIGINT,
+    vollstaendiger_name_pseudonym BIGINT,
+    risikoklasse_nach_gwg INT,
+    person_ist_pep CHAR(1),
+    letzte_bearbeitung_wirtschaftlich_berechtigte DATE,
+    aktualitaet_der_kundendaten_wurde_ueberprueft DATE,
+    strasse_pseudonym BIGINT,
+    postleitzahl_pseudonym BIGINT,
+    ort_pseudonym BIGINT,
+    land_bezeichnung_pseudonym BIGINT
 );
 
--- Configurations table for saving filter and rule sets
-CREATE TABLE IF NOT EXISTS configurations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    config_json TEXT NOT NULL,  -- JSON containing filters and rules
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+-- Table 2: Softfact View
+CREATE TABLE IF NOT EXISTS softfact_vw (
+    pk NVARCHAR(203) PRIMARY KEY,
+    banknummer VARCHAR(20),
+    banknummer_fusionierter_kunde VARCHAR(20),
+    stichtag DATE,
+    feststellung_wirtschaftlich_berechtigter INT,
+    guid UNIQUEIDENTIFIER,
+    kundennummer VARCHAR(20),
+    kundennummer_fusionierter_kunde VARCHAR(20),
+    personennummer_pseudonym BIGINT,
+    personennummer_2_kunde_pseudonym BIGINT,
+    rollentyp INT,
+    softfact_laufende_nummer INT,
+    softfactartschluessel VARCHAR(11),
+    softfacttyp DECIMAL(2),
+    schluesselart VARCHAR(250),
+    softfactartbezeichnung VARCHAR(250),
+    statistikschluessel VARCHAR(250)
 );
 
--- Sampling history table to track sampling runs
-CREATE TABLE IF NOT EXISTS sampling_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    config_id INTEGER,
-    sample_count INTEGER NOT NULL,
-    summary_json TEXT,  -- JSON containing summary statistics
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (config_id) REFERENCES configurations(id) ON DELETE SET NULL
+-- Table 3: Kontodaten View (Account Data View)
+CREATE TABLE IF NOT EXISTS kontodaten_vw (
+    pk NVARCHAR(152) PRIMARY KEY,
+    guid UNIQUEIDENTIFIER,
+    banknummer VARCHAR(20),
+    banknummer_fusionierter_kunde VARCHAR(20),
+    stichtag DATE,
+    personennummer_pseudonym BIGINT,
+    kontonummer_pseudonym BIGINT,
+    kundennummer_fusionierter_kunde BIGINT,
+    kontoeroeffnung DATE,
+    konto_fuer_fremde_rechnung CHAR(1),
+    anderkonto CHAR(1),
+    treuhandkonto CHAR(1),
+    aufloesungskennzeichen CHAR(1),
+    kontoaenderungsdatum DATE,
+    geschaeftsart DECIMAL(3),
+    spartenschluessel VARCHAR(2)
 );
 
--- Sampling results table to store actual sampled records
-CREATE TABLE IF NOT EXISTS sampling_results (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    history_id INTEGER NOT NULL,
-    rule_name TEXT NOT NULL,
-    data_json TEXT NOT NULL,  -- JSON containing the sampled record
-    FOREIGN KEY (history_id) REFERENCES sampling_history(id) ON DELETE CASCADE
-);
+-- Indexes for better query performance
+CREATE INDEX IF NOT EXISTS idx_kundenstamm_stichtag ON kundenstamm(stichtag);
+CREATE INDEX IF NOT EXISTS idx_kundenstamm_banknummer ON kundenstamm(banknummer);
+CREATE INDEX IF NOT EXISTS idx_kundenstamm_kundennummer ON kundenstamm(kundennummer);
 
--- Create indexes for better performance
-CREATE INDEX IF NOT EXISTS idx_financial_data_date ON financial_data(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_financial_data_amount ON financial_data(amount);
-CREATE INDEX IF NOT EXISTS idx_financial_data_category ON financial_data(category);
-CREATE INDEX IF NOT EXISTS idx_configurations_name ON configurations(name);
-CREATE INDEX IF NOT EXISTS idx_sampling_history_config ON sampling_history(config_id);
-CREATE INDEX IF NOT EXISTS idx_sampling_results_history ON sampling_results(history_id);
+CREATE INDEX IF NOT EXISTS idx_softfact_stichtag ON softfact_vw(stichtag);
+CREATE INDEX IF NOT EXISTS idx_softfact_banknummer ON softfact_vw(banknummer);
+CREATE INDEX IF NOT EXISTS idx_softfact_kundennummer ON softfact_vw(kundennummer);
 
--- Trigger to update the updated_at timestamp for configurations
-CREATE TRIGGER IF NOT EXISTS update_configurations_timestamp
-    AFTER UPDATE ON configurations
-BEGIN
-    UPDATE configurations SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-END;
-
--- Example view for common queries
-CREATE VIEW IF NOT EXISTS v_recent_samples AS
-SELECT
-    sh.id as history_id,
-    sh.created_at as sample_date,
-    sh.sample_count,
-    c.name as config_name,
-    c.description as config_description
-FROM sampling_history sh
-LEFT JOIN configurations c ON sh.config_id = c.id
-ORDER BY sh.created_at DESC
-LIMIT 100;
+CREATE INDEX IF NOT EXISTS idx_kontodaten_stichtag ON kontodaten_vw(stichtag);
+CREATE INDEX IF NOT EXISTS idx_kontodaten_banknummer ON kontodaten_vw(banknummer);
+CREATE INDEX IF NOT EXISTS idx_kontodaten_personennummer ON kontodaten_vw(personennummer_pseudonym);

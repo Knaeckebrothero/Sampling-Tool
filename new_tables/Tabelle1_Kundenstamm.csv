@@ -1,0 +1,21 @@
+﻿PK;Banknummer;Kundennummer;Stichtag;Personennummer_PSEUDONYM;Kundennummer_FusionierterKunde;Banknummer_FusionierterKunde;Art_Kundenstammvertrag;Geburtsdatum_Gruendungsdatum_PSEUDONYM;Geburtsort_PSEUDONYM;Person_angelegt_am;Rechtsform;Rechtsformauspraegung;Rechtsform_binaer;Rechtsformauspraegung_Beschreibung_1;Rechtsformauspraegung_Beschreibung_2;Grundform;Staatsangehoerigkeit_Nationalitaet_Bezeichnung_PSEUDONYM;Ausstellende_Behoerde_Ausweis;Ausstellungsdatum_Ausweis;Ausweisart;Ausweiskopie_vorhanden;Ausweisnummer_PSEUDONYM;Eingetragen_am;Gueltig_bis_Ausweis;Legitimation_geprueft_am;Legitimationsverfahren;Ort_Registergericht;Registerart;Registernummer_PSEUDONYM;Vorname_fuer_Par_24c_KWG_PSEUDONYM;Nachname_fuer_Par_24c_KWG_PSEUDONYM;Firmenname_fuer_Par_24c_KWG_PSEUDONYM;Nachname_PSEUDONYM;Vorname_PSEUDONYM;Vollstaendiger_Name_PSEUDONYM;Risikoklasse_nach_GWG;Person_ist_PEP;Letzte_Bearbeitung_wirtschaftlich_Berechtigte;Aktualitaet_der_Kundendaten_wurde_ueberprueft;Strasse_PSEUDONYM;Postleitzahl_PSEUDONYM;Ort_PSEUDONYM;Land_Bezeichnung_PSEUDONYM
+8602_2025-03-31_130025;8602;998602;31.03.2025;130025;998602;8602;0;125725;2468;13.05.2024;1;211;natürliche Person;B. Wirtschaftlich unselbständige Privatpersonen. - BA: Berufstätige Privatpersonen (einschließlich Arbeitslose).;Angestellte(r).;Sonstige;654;Münster-ACI;01.01.2020;Personalausweis;NULL;29619;NULL;01.01.2030;22.04.2024;NULL;NULL;NULL;NULL;41279;130020;NULL;130020;41279;NULL;9;NULL;NULL;13.05.2024;714007;130073;130071;NULL
+nvarchar(152);varchar(20);varchar(20);date;bigint;varchar(20);varchar(20);int;bigint;bigint;date;decimal(29;decimal(3);varchar(25);varchar(200);varchar(400);varchar(25);bigint;varchar(50);date;varchar(40);char(1);bigint;date;date;date;varchar(25);varchar(32);decimal(3);bigint;bigint;bigint;bigint;bigint;bigint;bigint;int;char(1);date;date;bigint;bigint;bigint;bigint
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

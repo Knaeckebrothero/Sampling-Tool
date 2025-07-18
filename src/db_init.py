@@ -1,398 +1,248 @@
-import json
+import sqlite3
+import pandas as pd
+import sys
+import os
 import argparse
 import logging
-import os
-import sqlite3
-import sys
-import pandas as pd
-import csv
-from datetime import datetime
+from typing import Optional, Dict, List
 
-def setup_logging(verbose=False):
+
+def setup_logging():
     """Set up logging configuration."""
-    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
     )
     return logging.getLogger(__name__)
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Initialize the sampling tool database.')
-    parser.add_argument(
-        '--db-path',
-        default='./data/sampling.db',
-        help='Path to the SQLite database file'
-    )
-    parser.add_argument(
-        '--schema-path',
-        default='./schema.sql',
-        help='Path to the schema SQL file'
-    )
-    parser.add_argument(
-        '--csv-path',
-        help='Path to CSV file with initial data'
-    )
-    parser.add_argument(
-        '--delimiter',
-        default=';',
-        help='CSV delimiter (default: semicolon)'
-    )
-    parser.add_argument(
-        '--force-reset',
-        action='store_true',
-        help='Force reset the database (deletes existing data)'
-    )
-    parser.add_argument(
-        '--create-dynamic-schema',
-        action='store_true',
-        help='Create table schema dynamically based on CSV columns'
-    )
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
-    )
-    return parser.parse_args()
 
-def ensure_directory_exists(path):
-    """Ensure the directory for the given file path exists."""
-    directory = os.path.dirname(path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory)
-        return True
-    return False
-
-def detect_column_type(values):
-    """Detect SQL column type based on sample values."""
-    # Remove None/empty values
-    clean_values = [v for v in values if v and str(v).strip()]
-
-    if not clean_values:
-        return "TEXT"
-
-    # Check if all values are numeric
+def execute_schema(conn, schema_path, logger):
+    """Execute SQL schema file."""
     try:
-        for val in clean_values[:20]:  # Check first 20 values
-            float(str(val).replace(',', '.').replace(' ', ''))
-        return "REAL"
-    except:
-        pass
-
-    # Check if values look like dates
-    date_patterns = ['%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%m/%d/%Y']
-    date_count = 0
-    for val in clean_values[:20]:
-        for pattern in date_patterns:
-            try:
-                datetime.strptime(str(val), pattern)
-                date_count += 1
-                break
-            except:
-                pass
-
-    if date_count > len(clean_values[:20]) * 0.5:
-        return "DATE"
-
-    # Default to TEXT
-    return "TEXT"
-
-def create_dynamic_table_from_csv(conn, csv_path, table_name, delimiter, logger):
-    """Create table dynamically based on CSV structure."""
-    try:
-        # Read CSV header and sample data
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter=delimiter)
-            headers = reader.fieldnames
-
-            # Read sample rows for type detection
-            sample_data = []
-            for i, row in enumerate(reader):
-                sample_data.append(row)
-                if i >= 100:  # Read up to 100 rows
-                    break
-
-        if not headers:
-            raise ValueError("CSV file has no headers")
-
-        # Detect column types
-        column_definitions = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
-
-        for header in headers:
-            # Clean column name (remove special characters, spaces)
-            clean_name = header.strip().replace(' ', '_').replace('-', '_')
-            clean_name = ''.join(c for c in clean_name if c.isalnum() or c == '_')
-
-            # Get sample values for this column
-            values = [row.get(header) for row in sample_data]
-            sql_type = detect_column_type(values)
-
-            column_definitions.append(f"{clean_name} {sql_type}")
-            logger.debug(f"Column '{header}' -> '{clean_name}' ({sql_type})")
-
-        # Add timestamp
-        column_definitions.append("created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-
-        # Create table
-        create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            {', '.join(column_definitions)}
-        )
-        """
-
-        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-        conn.execute(create_table_sql)
-        conn.commit()
-
-        logger.info(f"Created dynamic table '{table_name}' with {len(headers)} columns")
-        return True
-
+        with open(schema_path, 'r') as f:
+            schema = f.read()
+            # SQLite doesn't support UNIQUEIDENTIFIER, replace with TEXT
+            schema = schema.replace('UNIQUEIDENTIFIER', 'TEXT')
+            # SQLite doesn't support NVARCHAR, replace with VARCHAR
+            schema = schema.replace('NVARCHAR', 'VARCHAR')
+            
+            cursor = conn.cursor()
+            cursor.executescript(schema)
+            conn.commit()
+            logger.info("Database schema created/updated successfully")
+            return True
     except Exception as e:
-        logger.error(f"Error creating dynamic table: {e}")
+        logger.error(f"Error executing schema: {e}")
         return False
 
-def execute_sql_file(conn, filepath, logger):
-    """Execute SQL commands from a file."""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as sql_file:
-            sql_script = sql_file.read()
-            conn.executescript(sql_script)
-            conn.commit()
-            logger.info(f"Successfully executed SQL from {filepath}")
-            return True
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error: {e}")
-        conn.rollback()
-    except IOError as e:
-        logger.error(f"I/O error: {e}")
-    return False
 
-def import_csv_data(conn, csv_path, table_name, delimiter, logger):
-    """Import data from CSV file."""
+def get_table_mapping(csv_filename: str) -> Optional[str]:
+    """Map CSV filename to table name."""
+    mappings = {
+        'tabelle1_kundenstamm.csv': 'kundenstamm',
+        'tabelle2_softfact_vw.csv': 'softfact_vw',
+        'tabelle3_kontodaten_vw.csv': 'kontodaten_vw'
+    }
+    
+    # Case-insensitive matching
+    csv_lower = csv_filename.lower()
+    for pattern, table in mappings.items():
+        if pattern in csv_lower:
+            return table
+    
+    return None
+
+
+def import_csv_to_table(conn, csv_path, table_name, delimiter=';', logger=None):
+    """Import CSV data into specified table."""
     try:
         # Read CSV with pandas
-        df = pd.read_csv(csv_path, delimiter=delimiter)
-
-        # Clean column names to match database
-        df.columns = [
-            ''.join(c for c in col.strip().replace(' ', '_').replace('-', '_')
-                   if c.isalnum() or c == '_')
-            for col in df.columns
-        ]
-
-        # Import to database
-        df.to_sql(table_name, conn, if_exists='append', index=False)
-        logger.info(f"Imported {len(df)} records from {csv_path}")
-        return True
-
-    except Exception as e:
-        logger.error(f"Error importing CSV: {e}")
-        return False
-
-def create_example_configuration(conn, logger):
-    """Create an example configuration."""
-    try:
-        example_config = {
-            "global_filters": [
-                {
-                    "column": "amount",
-                    "column_type": "number",
-                    "filter_config": {
-                        "min": 1000,
-                        "max": 50000
-                    }
-                }
-            ],
-            "sampling_rules": [
-                {
-                    "name": "High Value Transactions",
-                    "column": "amount",
-                    "column_type": "number",
-                    "filter_config": {
-                        "min": 10000
-                    },
-                    "sample_count": 5
-                },
-                {
-                    "name": "Medium Value Transactions",
-                    "column": "amount",
-                    "column_type": "number",
-                    "filter_config": {
-                        "min": 1000,
-                        "max": 10000
-                    },
-                    "sample_count": 10
-                }
-            ]
-        }
-
+        df = pd.read_csv(csv_path, delimiter=delimiter, encoding='utf-8-sig')
+        logger.info(f"Read {len(df)} rows from {csv_path}")
+        logger.info(f"Original columns: {list(df.columns)}")
+        
+        # Skip the data type row (row 2 in the CSVs)
+        if len(df) > 2:
+            # Check if second row contains data type info
+            second_row = df.iloc[1]
+            if any(str(val).lower() in ['varchar', 'nvarchar', 'int', 'bigint', 'date', 'decimal', 'char', 'uniqueidentifier'] 
+                   for val in second_row.values):
+                logger.info("Detected data type row, removing it")
+                df = df.drop(df.index[1])
+                df = df.reset_index(drop=True)
+        
+        # Skip empty rows (rows 3 and 4 in the CSVs)
+        df = df.dropna(how='all')
+        logger.info(f"After removing empty rows: {len(df)} rows")
+        
+        # Clean column names - convert to lowercase and replace special characters
+        df.columns = [col.strip().lower().replace(' ', '_').replace('-', '_').replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss') for col in df.columns]
+        logger.info(f"Cleaned columns: {list(df.columns)}")
+        
+        # Handle BOM character in first column name if present
+        if df.columns[0].startswith('\ufeff'):
+            df.columns = [df.columns[0].replace('\ufeff', '')] + list(df.columns[1:])
+        
+        # Convert data types based on column names and content
+        df_converted = df.copy()
+        
+        for col in df_converted.columns:
+            if df_converted[col].dtype == 'object':
+                sample_values = df_converted[col].dropna().head(5)
+                
+                # Try to detect and convert dates
+                if 'datum' in col or 'date' in col or col == 'stichtag':
+                    try:
+                        df_converted[col] = pd.to_datetime(df_converted[col], format='%d.%m.%Y', errors='coerce')
+                        logger.info(f"  Converted '{col}' to datetime")
+                    except:
+                        pass
+                
+                # Try to detect and convert numeric fields
+                elif any(keyword in col for keyword in ['nummer', 'id', 'pk', 'count', 'amount']):
+                    try:
+                        # For European format numbers
+                        if any(',' in str(val) for val in sample_values if pd.notna(val)):
+                            converted = df_converted[col].apply(lambda x: 
+                                str(x).replace('.', '').replace(',', '.') if isinstance(x, str) else x
+                            )
+                            df_converted[col] = pd.to_numeric(converted, errors='coerce')
+                        else:
+                            df_converted[col] = pd.to_numeric(df_converted[col], errors='coerce')
+                        logger.info(f"  Converted '{col}' to numeric")
+                    except:
+                        pass
+        
+        # Show sample of data to be imported
+        logger.info("Sample of data to be imported:")
+        logger.info(df_converted.head(3).to_string())
+        
+        # Drop existing data from table (but keep structure)
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO configurations (name, description, config_json)
-            VALUES (?, ?, ?)
-        """, (
-            "Example Configuration",
-            "Sample configuration for demonstration",
-            json.dumps(example_config)
-        ))
+        cursor.execute(f"DELETE FROM {table_name}")
         conn.commit()
-
-        logger.info("Created example configuration")
+        
+        # Import to database
+        df_converted.to_sql(table_name, conn, if_exists='append', index=False)
+        
+        # Verify the import
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cursor.fetchone()[0]
+        logger.info(f"Successfully imported {count} records to {table_name}")
+        
         return True
-
-    except sqlite3.Error as e:
-        logger.error(f"Error creating example configuration: {e}")
+        
+    except Exception as e:
+        logger.error(f"Error importing CSV to {table_name}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
-def verify_database(conn, logger):
-    """Verify database contents."""
+
+def main():
+    """Main initialization function."""
+    logger = setup_logging()
+    
+    parser = argparse.ArgumentParser(description='Initialize the sampling tool database')
+    parser.add_argument('--db-path', default='./data/sampling.db', help='Database path')
+    parser.add_argument('--schema-path', default='./schema.sql', help='Schema SQL file path')
+    parser.add_argument('--csv-path', help='CSV file to import')
+    parser.add_argument('--csv-dir', help='Directory containing CSV files to import')
+    parser.add_argument('--table', help='Target table name (auto-detected if not specified)')
+    parser.add_argument('--delimiter', default=';', help='CSV delimiter')
+    parser.add_argument('--reset', action='store_true', help='Reset database')
+    
+    args = parser.parse_args()
+    
+    # Create data directory if needed
+    os.makedirs(os.path.dirname(args.db_path), exist_ok=True)
+    
+    # Handle reset
+    if args.reset and os.path.exists(args.db_path):
+        os.remove(args.db_path)
+        logger.info("Removed existing database")
+    
+    # Connect to database
+    try:
+        conn = sqlite3.connect(args.db_path)
+        conn.row_factory = sqlite3.Row
+        logger.info(f"Connected to database: {args.db_path}")
+    except sqlite3.Error as e:
+        logger.error(f"Failed to connect: {e}")
+        return 1
+    
+    # Execute schema
+    schema_path = args.schema_path
+    if not os.path.isabs(schema_path):
+        # Try to find schema.sql relative to this script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        schema_path = os.path.join(script_dir, 'schema.sql')
+    
+    if os.path.exists(schema_path):
+        if not execute_schema(conn, schema_path, logger):
+            return 1
+    else:
+        logger.warning(f"Schema file not found at {schema_path}")
+        logger.info("Creating minimal table structure...")
+        # Create minimal tables
+        cursor = conn.cursor()
+        cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS kundenstamm (pk TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS softfact_vw (pk TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS kontodaten_vw (pk TEXT PRIMARY KEY);
+        """)
+        conn.commit()
+    
+    # Import CSV(s)
+    if args.csv_dir:
+        # Import all CSVs from directory
+        csv_files = [f for f in os.listdir(args.csv_dir) if f.lower().endswith('.csv')]
+        logger.info(f"Found {len(csv_files)} CSV files in {args.csv_dir}")
+        
+        for csv_file in csv_files:
+            csv_path = os.path.join(args.csv_dir, csv_file)
+            table_name = get_table_mapping(csv_file)
+            
+            if table_name:
+                logger.info(f"\nImporting {csv_file} to table {table_name}")
+                import_csv_to_table(conn, csv_path, table_name, args.delimiter, logger)
+            else:
+                logger.warning(f"Could not determine table for {csv_file}, skipping")
+    
+    elif args.csv_path:
+        # Import single CSV
+        table_name = args.table
+        if not table_name:
+            # Try to auto-detect from filename
+            table_name = get_table_mapping(os.path.basename(args.csv_path))
+        
+        if table_name:
+            if not import_csv_to_table(conn, args.csv_path, table_name, args.delimiter, logger):
+                return 1
+        else:
+            logger.error("Could not determine target table. Please specify --table")
+            return 1
+    
+    # Show summary
     cursor = conn.cursor()
-
-    # Check tables
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = cursor.fetchall()
-    logger.info(f"Database tables: {[table[0] for table in tables]}")
-
-    # Check record counts
-    for table in ['financial_data', 'configurations']:
+    logger.info("\nDatabase summary:")
+    for table in ['kundenstamm', 'softfact_vw', 'kontodaten_vw']:
         try:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
             count = cursor.fetchone()[0]
-            logger.info(f"Table '{table}' contains {count} records")
+            logger.info(f"  {table}: {count} records")
         except sqlite3.Error:
-            pass
+            logger.info(f"  {table}: table not found or empty")
+    
+    conn.close()
+    
+    if not args.csv_path and not args.csv_dir:
+        logger.info("\nTo import data:")
+        logger.info("  Single file: python db_init.py --csv-path file.csv")
+        logger.info("  Directory: python db_init.py --csv-dir ./new_tables/")
+    
+    return 0
 
-    return True
-
-def initialize_database(db_path, schema_path, csv_path, delimiter,
-                       force_reset, create_dynamic, logger):
-    """Initialize the database with schema and optional data."""
-    if ensure_directory_exists(db_path):
-        logger.info(f"Created directory for database")
-
-    # Handle force reset
-    if force_reset and os.path.exists(db_path):
-        try:
-            os.remove(db_path)
-            logger.warning(f"Deleted existing database")
-        except OSError as e:
-            logger.error(f"Failed to delete database: {e}")
-            return False
-
-    # Connect to database
-    try:
-        conn = sqlite3.connect(db_path)
-        logger.info(f"Connected to database at {db_path}")
-    except sqlite3.Error as e:
-        logger.error(f"Failed to connect: {e}")
-        return False
-
-    try:
-        # Create dynamic schema if requested and CSV provided
-        if create_dynamic and csv_path:
-            if not create_dynamic_table_from_csv(conn, csv_path, 'financial_data',
-                                                delimiter, logger):
-                return False
-        else:
-            # Execute standard schema
-            if not execute_sql_file(conn, schema_path, logger):
-                return False
-
-        # Always create configuration tables
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS configurations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                config_json TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS sampling_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                config_id INTEGER,
-                sample_count INTEGER NOT NULL,
-                summary_json TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (config_id) REFERENCES configurations(id) ON DELETE SET NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sampling_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                history_id INTEGER NOT NULL,
-                rule_name TEXT NOT NULL,
-                data_json TEXT NOT NULL,
-                FOREIGN KEY (history_id) REFERENCES sampling_history(id) ON DELETE CASCADE
-            );
-        """)
-
-        # Import CSV data if provided
-        if csv_path and os.path.exists(csv_path):
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM financial_data")
-            count = cursor.fetchone()[0]
-
-            if count == 0:
-                if not import_csv_data(conn, csv_path, 'financial_data', delimiter, logger):
-                    logger.warning("Failed to import CSV data, continuing anyway")
-            else:
-                logger.info(f"Table 'financial_data' already contains {count} records")
-
-        # Create example configuration
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM configurations")
-        if cursor.fetchone()[0] == 0:
-            create_example_configuration(conn, logger)
-
-        # Verify database
-        verify_database(conn, logger)
-
-        conn.close()
-        logger.info("Database initialization completed successfully")
-        return True
-
-    except Exception as e:
-        logger.error(f"Error during initialization: {e}")
-        conn.close()
-        return False
-
-def main():
-    args = parse_args()
-    logger = setup_logging(args.verbose)
-
-    logger.info("Starting database initialization")
-    logger.info(f"Database path: {args.db_path}")
-
-    # Validate paths
-    if not args.create_dynamic_schema and not os.path.exists(args.schema_path):
-        logger.error(f"Schema file not found: {args.schema_path}")
-        return 1
-
-    if args.csv_path and not os.path.exists(args.csv_path):
-        logger.error(f"CSV file not found: {args.csv_path}")
-        return 1
-
-    # Initialize database
-    success = initialize_database(
-        args.db_path,
-        args.schema_path,
-        args.csv_path,
-        args.delimiter,
-        args.force_reset,
-        args.create_dynamic_schema,
-        logger
-    )
-
-    if success:
-        logger.info("\n" + "="*50)
-        logger.info("Database initialization completed!")
-        logger.info("You can now run the sampling tool.")
-        logger.info("="*50)
-
-    return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main())

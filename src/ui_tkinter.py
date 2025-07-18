@@ -1,16 +1,16 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import random
 import json
 from collections import defaultdict
 
 
-class HybridSampleTestingApp:
+class SimpleSampleTestingApp:
     def __init__(self, root, data_handler):
         self.root = root
-        self.root.title("Hybrid Dimensional & Stratified Sampling Tool")
-        self.root.geometry("1300x800")
+        self.root.title("Simple Stratified Sampling Tool")
+        self.root.geometry("1200x700")
 
         # Reference to data handler
         self.data_handler = data_handler
@@ -19,8 +19,6 @@ class HybridSampleTestingApp:
         style = ttk.Style()
         style.configure('Accent.TButton', font=('TkDefaultFont', 11, 'bold'))
 
-        # UI state
-        self.delimiter_var = tk.StringVar(value=';')
 
         # Create main frames
         self.create_widgets()
@@ -54,6 +52,9 @@ class HybridSampleTestingApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
+        # Initialize data after all widgets are created
+        self.load_file()
+
     def create_data_tab(self):
         # Database connection frame
         db_frame = ttk.Frame(self.data_tab, padding="10")
@@ -63,24 +64,19 @@ class HybridSampleTestingApp:
         self.file_label = ttk.Label(db_frame, text="Connecting to database...", relief=tk.SUNKEN, width=50)
         self.file_label.grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
         ttk.Button(db_frame, text="Refresh Data", command=self.load_file).grid(row=0, column=2)
+        
+        # Table selector
+        ttk.Label(db_frame, text="Active Table:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        self.table_var = tk.StringVar(value="kundenstamm")
+        self.table_combo = ttk.Combobox(db_frame, textvariable=self.table_var,
+                                        values=self.data_handler.available_tables, 
+                                        state="readonly", width=30)
+        self.table_combo.grid(row=1, column=1, padx=5, pady=(5, 0), sticky=tk.W)
+        self.table_combo.bind('<<ComboboxSelected>>', self.on_table_changed)
+        
+        # Join tables button
+        ttk.Button(db_frame, text="Configure Joins...", command=self.configure_joins).grid(row=1, column=2, pady=(5, 0))
 
-        # Import/Export options
-        ttk.Label(db_frame, text="Import CSV:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        import_frame = ttk.Frame(db_frame)
-        import_frame.grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=5)
-
-        ttk.Button(import_frame, text="Import from CSV...", command=self.import_csv).pack(side=tk.LEFT)
-        ttk.Label(import_frame, text="Delimiter:").pack(side=tk.LEFT, padx=(10, 5))
-        delimiter_combo = ttk.Combobox(import_frame, textvariable=self.delimiter_var,
-                                       values=[';', ',', '\t', '|'], width=5)
-        delimiter_combo.pack(side=tk.LEFT)
-
-        # Saved configurations
-        config_frame = ttk.LabelFrame(self.data_tab, text="Saved Configurations", padding="10")
-        config_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=10, pady=5)
-
-        ttk.Button(config_frame, text="Load Configuration", command=self.load_saved_config).grid(row=0, column=0, padx=5)
-        ttk.Button(config_frame, text="View History", command=self.view_history).grid(row=0, column=1, padx=5)
 
         # Column info frame
         info_frame = ttk.LabelFrame(self.data_tab, text="Detected Columns", padding="10")
@@ -118,131 +114,6 @@ class HybridSampleTestingApp:
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
 
-        # Initialize data on startup
-        self.load_file()
-
-    def import_csv(self):
-        """Import data from CSV file into database"""
-        filename = filedialog.askopenfilename(
-            title="Select CSV file to import",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
-
-        if filename:
-            delimiter = self.delimiter_var.get()
-            try:
-                if messagebox.askyesno("Confirm Import",
-                                     "This will replace all existing data in the database. Continue?"):
-                    self.data_handler.load_csv(filename, delimiter)
-                    self.load_file()  # Refresh display
-                    messagebox.showinfo("Success", "CSV data imported successfully!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to import CSV: {str(e)}")
-
-    def load_saved_config(self):
-        """Load a saved configuration from database"""
-        configs = self.data_handler.get_configurations_list()
-
-        if not configs:
-            messagebox.showinfo("No Configurations", "No saved configurations found.")
-            return
-
-        # Create selection dialog
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Select Configuration")
-        dialog.geometry("600x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        # Configuration list
-        columns = ('Name', 'Description', 'Created')
-        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=10)
-
-        tree.heading('Name', text='Configuration Name')
-        tree.heading('Description', text='Description')
-        tree.heading('Created', text='Created Date')
-
-        tree.column('Name', width=200)
-        tree.column('Description', width=250)
-        tree.column('Created', width=150)
-
-        # Add configurations to tree
-        for config in configs:
-            tree.insert('', tk.END, values=(
-                config['name'],
-                config.get('description', ''),
-                config.get('created_at', '')[:19]  # Truncate timestamp
-            ))
-
-        tree.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        # Buttons
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(pady=10)
-
-        def load_selected():
-            selection = tree.selection()
-            if selection:
-                index = tree.index(selection[0])
-                config = configs[index]
-                try:
-                    self.data_handler.load_configuration(config['name'])
-                    self.update_filters_display()
-                    self.update_rules_display()
-                    self.apply_global_filters()
-                    dialog.destroy()
-                    messagebox.showinfo("Success", f"Loaded configuration: {config['name']}")
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
-
-        ttk.Button(button_frame, text="Load", command=load_selected).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
-
-    def view_history(self):
-        """View sampling history"""
-        history = self.data_handler.get_sampling_history()
-
-        if not history:
-            messagebox.showinfo("No History", "No sampling history found.")
-            return
-
-        # Create history dialog
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Sampling History")
-        dialog.geometry("700x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        # History list
-        columns = ('Date', 'Configuration', 'Samples', 'Summary')
-        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=12)
-
-        tree.heading('Date', text='Sample Date')
-        tree.heading('Configuration', text='Configuration Used')
-        tree.heading('Samples', text='Sample Count')
-        tree.heading('Summary', text='Summary')
-
-        tree.column('Date', width=150)
-        tree.column('Configuration', width=200)
-        tree.column('Samples', width=100)
-        tree.column('Summary', width=250)
-
-        # Add history to tree
-        for entry in history:
-            summary = json.loads(entry.get('summary_json', '{}'))
-            summary_text = f"From {summary.get('total_filtered', 0)} filtered records"
-
-            tree.insert('', tk.END, values=(
-                entry.get('created_at', '')[:19],
-                entry.get('config_name', 'Unknown'),
-                entry.get('sample_count', 0),
-                summary_text
-            ))
-
-        tree.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        # Close button
-        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
 
     def create_filters_tab(self):
         # Instructions
@@ -323,8 +194,8 @@ class HybridSampleTestingApp:
         ttk.Button(button_frame, text="Edit Rule", command=self.edit_sampling_rule).grid(row=0, column=1, padx=5)
         ttk.Button(button_frame, text="Delete Rule", command=self.delete_sampling_rule).grid(row=0, column=2, padx=5)
         ttk.Button(button_frame, text="Clear All", command=self.clear_sampling_rules).grid(row=0, column=3, padx=5)
-        ttk.Button(button_frame, text="Save Configuration", command=self.save_configuration).grid(row=0, column=4, padx=5)
-        ttk.Button(button_frame, text="Load Configuration", command=self.load_configuration).grid(row=0, column=5, padx=5)
+        ttk.Button(button_frame, text="Save Config", command=self.save_configuration).grid(row=0, column=4, padx=5)
+        ttk.Button(button_frame, text="Load Config", command=self.load_configuration).grid(row=0, column=5, padx=5)
 
         # Rules list
         rules_frame = ttk.LabelFrame(self.rules_tab, text="Sampling Rules with Quotas", padding="10")
@@ -412,11 +283,16 @@ class HybridSampleTestingApp:
             self.update_preview()
             self.setup_dynamic_trees()
 
-            messagebox.showinfo("Success",
-                                f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
+            # Only show success if we have data
+            if self.data_handler.data:
+                messagebox.showinfo("Success",
+                                    f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
+            else:
+                messagebox.showwarning("No Data",
+                                       "Database is empty. Please ensure production database contains data.")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to connect to database: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load data: {str(e)}")
 
     def update_column_display(self):
         """Update the column list display"""
@@ -453,9 +329,17 @@ class HybridSampleTestingApp:
                 if value is None:
                     values.append('')
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.NUMBER:
-                    values.append(f"{value:,.2f}".replace(',', ' ').replace('.', ','))
+                    try:
+                        # Format number with European style (comma as decimal separator)
+                        num_val = float(value)
+                        values.append(f"{num_val:,.2f}".replace(',', ' ').replace('.', ','))
+                    except:
+                        values.append(str(value))
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.DATE:
-                    values.append(value.strftime('%d-%m-%Y'))
+                    if isinstance(value, str):
+                        values.append(value)
+                    else:
+                        values.append(value.strftime('%d-%m-%Y'))
                 else:
                     values.append(str(value))
             self.preview_tree.insert('', tk.END, values=values)
@@ -465,17 +349,19 @@ class HybridSampleTestingApp:
 
     def setup_dynamic_trees(self):
         """Setup the results tree with dynamic columns"""
-        # Results tree columns: Rule Name + all data columns
-        columns = ['Rule'] + self.data_handler.column_names
-        self.results_tree['columns'] = columns
+        # Only setup if results_tree exists (it might not during initialization)
+        if hasattr(self, 'results_tree'):
+            # Results tree columns: Rule Name + all data columns
+            columns = ['Rule'] + self.data_handler.column_names
+            self.results_tree['columns'] = columns
 
-        for col in columns:
-            self.results_tree.heading(col, text=col)
-            self.results_tree.column(col, width=120)
+            for col in columns:
+                self.results_tree.heading(col, text=col)
+                self.results_tree.column(col, width=120)
 
     def add_global_filter(self):
         if not self.data_handler.column_names:
-            messagebox.showwarning("Warning", "Please load a CSV file first")
+            messagebox.showwarning("Warning", "Please load data first")
             return
 
         # Get available columns (not already filtered)
@@ -563,7 +449,7 @@ class HybridSampleTestingApp:
 
     def add_sampling_rule(self):
         if not self.data_handler.column_names:
-            messagebox.showwarning("Warning", "Please load a CSV file first")
+            messagebox.showwarning("Warning", "Please load data first")
             return
 
         dialog = SamplingRuleDialog(self.root, "Add Sampling Rule",
@@ -681,9 +567,17 @@ class HybridSampleTestingApp:
                 if value is None:
                     values.append('')
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.NUMBER:
-                    values.append(f"{value:,.2f}".replace(',', ' ').replace('.', ','))
+                    try:
+                        # Format number with European style (comma as decimal separator)
+                        num_val = float(value)
+                        values.append(f"{num_val:,.2f}".replace(',', ' ').replace('.', ','))
+                    except:
+                        values.append(str(value))
                 elif self.data_handler.column_types[col] == self.data_handler.ColumnType.DATE:
-                    values.append(value.strftime('%d-%m-%Y'))
+                    if isinstance(value, str):
+                        values.append(value)
+                    else:
+                        values.append(value.strftime('%d-%m-%Y'))
                 else:
                     values.append(str(value))
 
@@ -740,7 +634,7 @@ class HybridSampleTestingApp:
 
         if filename:
             try:
-                delimiter = self.delimiter_var.get()
+                delimiter = ';'  # Default delimiter
                 self.data_handler.export_results(filename, delimiter)
                 messagebox.showinfo("Success", f"Results exported to {filename.split('/')[-1]}")
             except Exception as e:
@@ -758,7 +652,7 @@ class HybridSampleTestingApp:
             return
 
         try:
-            delimiter = self.delimiter_var.get()
+            delimiter = ';'  # Default delimiter
             file_count = self.data_handler.export_by_rule(directory, delimiter)
             messagebox.showinfo("Success", f"Exported {file_count} files to {directory}")
         except Exception as e:
@@ -770,6 +664,98 @@ class HybridSampleTestingApp:
             self.data_handler.clear_results()
             self.update_results_display()
             self.results_summary_label.config(text="Results cleared")
+    
+    def on_table_changed(self, event=None):
+        """Handle table selection change"""
+        selected_table = self.table_var.get()
+        if selected_table != self.data_handler.current_table:
+            if self.data_handler.results:
+                if not messagebox.askyesno("Confirm", "Changing tables will clear current results. Continue?"):
+                    # Reset combo to current table
+                    self.table_var.set(self.data_handler.current_table)
+                    return
+            
+            # Change table
+            self.data_handler.set_table(selected_table)
+            self.load_file()
+            messagebox.showinfo("Success", f"Switched to table: {selected_table}")
+    
+    def configure_joins(self):
+        """Open dialog to configure table joins"""
+        dialog = JoinConfigDialog(self.root, self.data_handler)
+        self.root.wait_window(dialog.dialog)
+        
+        if dialog.result:
+            # Apply join configuration
+            self.data_handler.set_join_config(dialog.result['tables'], dialog.result['type'])
+            self.load_file()
+            messagebox.showinfo("Success", "Join configuration applied")
+
+
+class JoinConfigDialog:
+    """Dialog for configuring table joins"""
+    def __init__(self, parent, data_handler):
+        self.result = None
+        self.data_handler = data_handler
+        
+        # Create dialog
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Configure Table Joins")
+        self.dialog.geometry("400x300")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Available tables (excluding current base table)
+        self.available_tables = [t for t in data_handler.available_tables if t != data_handler.current_table]
+        
+        # Create widgets
+        self.create_widgets()
+        
+    def create_widgets(self):
+        # Instructions
+        ttk.Label(self.dialog, text=f"Base table: {self.data_handler.current_table}", 
+                 font=('TkDefaultFont', 10, 'bold')).grid(row=0, column=0, columnspan=2, padx=10, pady=10)
+        
+        ttk.Label(self.dialog, text="Select tables to join:").grid(row=1, column=0, columnspan=2, padx=10, pady=5)
+        
+        # Table selection
+        self.table_vars = {}
+        row = 2
+        for table in self.available_tables:
+            var = tk.BooleanVar()
+            self.table_vars[table] = var
+            ttk.Checkbutton(self.dialog, text=table, variable=var).grid(row=row, column=0, padx=20, sticky=tk.W)
+            row += 1
+        
+        # Join type
+        ttk.Label(self.dialog, text="Join type:").grid(row=row, column=0, padx=10, pady=(10, 5), sticky=tk.W)
+        self.join_type_var = tk.StringVar(value="inner")
+        join_frame = ttk.Frame(self.dialog)
+        join_frame.grid(row=row+1, column=0, columnspan=2, padx=20)
+        
+        ttk.Radiobutton(join_frame, text="Inner Join", variable=self.join_type_var, value="inner").grid(row=0, column=0)
+        ttk.Radiobutton(join_frame, text="Left Join", variable=self.join_type_var, value="left").grid(row=0, column=1)
+        
+        # Buttons
+        button_frame = ttk.Frame(self.dialog)
+        button_frame.grid(row=row+2, column=0, columnspan=2, pady=20)
+        
+        ttk.Button(button_frame, text="Apply", command=self.apply_join).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.dialog.destroy).grid(row=0, column=1, padx=5)
+        
+    def apply_join(self):
+        """Apply the join configuration"""
+        selected_tables = [table for table, var in self.table_vars.items() if var.get()]
+        
+        if not selected_tables:
+            messagebox.showwarning("Warning", "Please select at least one table to join")
+            return
+        
+        self.result = {
+            'tables': selected_tables,
+            'type': self.join_type_var.get()
+        }
+        self.dialog.destroy()
 
 
 class GlobalFilterDialog:
@@ -971,7 +957,7 @@ class GlobalFilterDialog:
 
     def ok_clicked(self):
         """Validate and save the filter"""
-        from sample_testing_main import DimensionalFilter  # Import from main module
+        from main import DimensionalFilter  # Import from main module
 
         column = self.column_var.get()
         col_type = self.column_types[column]
@@ -1235,7 +1221,7 @@ class SamplingRuleDialog:
 
     def ok_clicked(self):
         """Validate and save the rule"""
-        from sample_testing_main import SamplingRule  # Import from main module
+        from main import SamplingRule  # Import from main module
 
         # Validate name
         name = self.name_entry.get().strip()
