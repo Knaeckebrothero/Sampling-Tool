@@ -41,7 +41,11 @@ def get_table_mapping(csv_filename: str) -> Optional[str]:
     mappings = {
         'tabelle1_kundenstamm.csv': 'kundenstamm',
         'tabelle2_softfact_vw.csv': 'softfact_vw',
-        'tabelle3_kontodaten_vw.csv': 'kontodaten_vw'
+        'tabelle3_kontodaten_vw.csv': 'kontodaten_vw',
+        # Add mappings for the new file names
+        'kundenstamm.csv': 'kundenstamm',
+        'softfact.csv': 'softfact_vw',
+        'kontodaten.csv': 'kontodaten_vw'
     }
     
     # Case-insensitive matching
@@ -99,7 +103,8 @@ def import_csv_to_table(conn, csv_path, table_name, delimiter=';', logger=None):
                         pass
                 
                 # Try to detect and convert numeric fields
-                elif any(keyword in col for keyword in ['nummer', 'id', 'pk', 'count', 'amount']):
+                # Skip 'pk' column as it should remain text
+                elif col != 'pk' and any(keyword in col for keyword in ['nummer', 'id', 'count', 'amount']):
                     try:
                         # For European format numbers
                         if any(',' in str(val) for val in sample_values if pd.notna(val)):
