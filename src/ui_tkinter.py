@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import random
 import json
@@ -19,8 +19,6 @@ class SimpleSampleTestingApp:
         style = ttk.Style()
         style.configure('Accent.TButton', font=('TkDefaultFont', 11, 'bold'))
 
-        # UI state
-        self.delimiter_var = tk.StringVar(value=';')
 
         # Create main frames
         self.create_widgets()
@@ -79,19 +77,10 @@ class SimpleSampleTestingApp:
         # Join tables button
         ttk.Button(db_frame, text="Configure Joins...", command=self.configure_joins).grid(row=1, column=2, pady=(5, 0))
 
-        # Import CSV frame
-        import_frame = ttk.LabelFrame(self.data_tab, text="Import CSV Data", padding="10")
-        import_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=10, pady=5)
-
-        ttk.Button(import_frame, text="Import CSV File...", command=self.import_csv).grid(row=0, column=0, padx=5)
-        ttk.Label(import_frame, text="Delimiter:").grid(row=0, column=1, padx=(10, 5))
-        delimiter_combo = ttk.Combobox(import_frame, textvariable=self.delimiter_var,
-                                       values=[';', ',', '\t', '|'], width=5)
-        delimiter_combo.grid(row=0, column=2)
 
         # Column info frame
         info_frame = ttk.LabelFrame(self.data_tab, text="Detected Columns", padding="10")
-        info_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
+        info_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
 
         # Column list
         self.column_listbox = tk.Listbox(info_frame, height=10)
@@ -103,7 +92,7 @@ class SimpleSampleTestingApp:
 
         # Data preview
         preview_frame = ttk.LabelFrame(self.data_tab, text="Data Preview", padding="10")
-        preview_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
+        preview_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=5)
 
         # Create preview tree
         self.preview_tree = ttk.Treeview(preview_frame, show='headings', height=10)
@@ -119,27 +108,12 @@ class SimpleSampleTestingApp:
 
         # Configure grid
         self.data_tab.columnconfigure(0, weight=1)
-        self.data_tab.rowconfigure(3, weight=1)
+        self.data_tab.rowconfigure(2, weight=1)
         info_frame.columnconfigure(0, weight=1)
         info_frame.rowconfigure(0, weight=1)
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
 
-    def import_csv(self):
-        """Import data from CSV file into database"""
-        filename = filedialog.askopenfilename(
-            title="Select CSV file to import",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
-
-        if filename:
-            delimiter = self.delimiter_var.get()
-            try:
-                self.data_handler.load_csv(filename, delimiter)
-                self.load_file()  # Refresh display
-                messagebox.showinfo("Success", "CSV data imported successfully!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to import CSV: {str(e)}")
 
     def create_filters_tab(self):
         # Instructions
@@ -315,7 +289,7 @@ class SimpleSampleTestingApp:
                                     f"Connected to database: {len(self.data_handler.data)} records with {len(self.data_handler.column_names)} columns")
             else:
                 messagebox.showwarning("No Data",
-                                       "Database is empty. Please import CSV data using the 'Import CSV File' button.")
+                                       "Database is empty. Please ensure production database contains data.")
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load data: {str(e)}")
@@ -660,7 +634,7 @@ class SimpleSampleTestingApp:
 
         if filename:
             try:
-                delimiter = self.delimiter_var.get()
+                delimiter = ';'  # Default delimiter
                 self.data_handler.export_results(filename, delimiter)
                 messagebox.showinfo("Success", f"Results exported to {filename.split('/')[-1]}")
             except Exception as e:
@@ -678,7 +652,7 @@ class SimpleSampleTestingApp:
             return
 
         try:
-            delimiter = self.delimiter_var.get()
+            delimiter = ';'  # Default delimiter
             file_count = self.data_handler.export_by_rule(directory, delimiter)
             messagebox.showinfo("Success", f"Exported {file_count} files to {directory}")
         except Exception as e:

@@ -374,35 +374,6 @@ class DataHandler:
 
         return ColumnType.TEXT
 
-    def load_csv(self, filename, delimiter):
-        """Import CSV data into database"""
-        try:
-            # Import CSV to database
-            # Determine target table from filename
-            import os
-            from src.db_init import get_table_mapping
-            
-            table_name = get_table_mapping(os.path.basename(filename))
-            if not table_name:
-                # Default to kundenstamm if can't determine
-                table_name = "kundenstamm"
-                log.warning(f"Could not determine table from filename, using {table_name}")
-            
-            # Import CSV to database
-            self.db.import_csv_data(filename, table_name, delimiter=delimiter, truncate=True)
-            
-            # Update current table
-            self.current_table = table_name
-            self.table_name = table_name
-
-            # Reinitialize data
-            self._initialize_data()
-
-            log.info(f"Imported data from {filename} into {table_name}")
-
-        except Exception as e:
-            log.error(f"Error importing CSV: {e}")
-            raise
 
     def refresh_data(self):
         """Refresh data from database"""
