@@ -36,7 +36,9 @@ class Database:
                 os.makedirs(db_dir, exist_ok=True)
 
             # Connect to database
-            self._conn = sqlite3.connect(self._path)
+            # check_same_thread=False allows the connection to be used across threads
+            # This is safe for read-only operations and demonstration purposes
+            self._conn = sqlite3.connect(self._path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row  # Enable column access by name
             self.cursor = self._conn.cursor()
             log.info(f"Connected to database at {self._path}")

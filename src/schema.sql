@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS kontodaten_vw (
     banknummer_fusionierter_kunde VARCHAR(20),
     stichtag DATE,
     personennummer_pseudonym BIGINT,
-    kontonummer_pseudonym BIGINT,
+    kontonummer_pseudonym BIGNT,
     kundennummer_fusionierter_kunde BIGINT,
     kontoeroeffnung DATE,
     konto_fuer_fremde_rechnung CHAR(1),
