@@ -3,6 +3,10 @@ import sqlite3
 import logging
 import pandas as pd
 from typing import Optional, List, Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 log = logging.getLogger(__name__)
@@ -13,10 +17,11 @@ class Database:
     Simplified database manager for the sampling tool.
     """
 
-    def __init__(self, db_path: str = "./data/sampling.db"):
+    def __init__(self, db_path: Optional[str] = None):
         """Initialize database connection."""
         log.debug("Initializing database connection...")
-        self._path = db_path
+        # Use environment variable or provided path, with fallback to default
+        self._path = db_path or os.getenv('DB_PATH', './sampling.db')
         self._conn: Optional[sqlite3.Connection] = None
         self.cursor: Optional[sqlite3.Cursor] = None
         self.connect()
@@ -25,8 +30,10 @@ class Database:
     def connect(self):
         """Establish connection to the database."""
         try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+            # Ensure directory exists (only if path has a directory)
+            db_dir = os.path.dirname(self._path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
 
             # Connect to database
             self._conn = sqlite3.connect(self._path)
@@ -278,6 +285,6 @@ class Database:
         return True
     
     @classmethod
-    def get_instance(cls, db_path: str = "./data/sampling.db"):
+    def get_instance(cls, db_path: Optional[str] = None):
         """Simple factory method to get database instance."""
         return cls(db_path)

@@ -6,8 +6,12 @@ from datetime import datetime
 import json
 import logging
 from collections import defaultdict
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Any, Tuple, Optional
 from database import Database
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -248,8 +252,8 @@ class SamplingRule:
 class DataHandler:
     """Handles all data operations using database backend"""
 
-    def __init__(self, db_path: str = "./data/sampling.db"):
-        # Database connection
+    def __init__(self, db_path: Optional[str] = None):
+        # Database connection - use environment variable or provided path
         self.db = Database.get_instance(db_path)
 
         # Data storage
