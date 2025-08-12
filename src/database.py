@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import pyodbc
 import logging
 import pandas as pd
 from typing import Optional, List, Dict, Any
@@ -14,79 +14,50 @@ log = logging.getLogger(__name__)
 
 class Database:
     """
-    Simplified database manager for the sampling tool.
+    MS SQL Server database manager for the sampling tool.
     """
 
     def __init__(self, db_path: Optional[str] = None):
         """Initialize database connection."""
-        log.debug("Initializing database connection...")
-        # Use environment variable or provided path, with fallback to default
-        self._path = db_path or os.getenv('DB_PATH', './sampling.db')
-        self._conn: Optional[sqlite3.Connection] = None
-        self.cursor: Optional[sqlite3.Cursor] = None
+        log.debug("Initializing MS SQL Server connection...")
+        # Load MS SQL configuration from environment
+        self._server = os.getenv('MSSQL_SERVER', 'localhost')
+        self._database = os.getenv('MSSQL_DATABASE', 'SamplingDB')
+        self._driver = os.getenv('MSSQL_DRIVER', 'ODBC Driver 17 for SQL Server')
+        
+        self._conn: Optional[pyodbc.Connection] = None
+        self.cursor: Optional[pyodbc.Cursor] = None
         self.connect()
-        log.info("Database initialized.")
+        log.info("MS SQL Server database initialized.")
 
     def connect(self):
-        """Establish connection to the database."""
+        """Establish connection to MS SQL Server."""
         try:
-            # Ensure directory exists (only if path has a directory)
-            db_dir = os.path.dirname(self._path)
-            if db_dir:
-                os.makedirs(db_dir, exist_ok=True)
-
-            # Connect to database
-            self._conn = sqlite3.connect(self._path)
-            self._conn.row_factory = sqlite3.Row  # Enable column access by name
+            # Build connection string for Windows Authentication
+            conn_str = (
+                f"DRIVER={{{self._driver}}};"
+                f"SERVER={self._server};"
+                f"DATABASE={self._database};"
+                f"Trusted_Connection=yes;"
+            )
+            
+            # Connect to MS SQL Server
+            self._conn = pyodbc.connect(conn_str)
             self.cursor = self._conn.cursor()
-            log.info(f"Connected to database at {self._path}")
-
-            # Create table if it doesn't exist
-            self._create_table()
-
-        except sqlite3.Error as e:
-            log.error(f"Failed to connect to database: {e}")
+            log.info(f"Connected to MS SQL Server: {self._server}/{self._database}")
+            
+            # Note: Tables are assumed to already exist in MS SQL Server
+            
+        except pyodbc.Error as e:
+            log.error(f"Failed to connect to MS SQL Server: {e}")
             raise
 
-    def _create_table(self):
-        """Create the database tables if they don't exist."""
-        try:
-            # Read and execute schema.sql
-            schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
-            if os.path.exists(schema_path):
-                with open(schema_path, 'r') as f:
-                    schema = f.read()
-                    # SQLite doesn't support UNIQUEIDENTIFIER, replace with TEXT
-                    schema = schema.replace('UNIQUEIDENTIFIER', 'TEXT')
-                    # SQLite doesn't support NVARCHAR, replace with TEXT
-                    schema = schema.replace('NVARCHAR', 'VARCHAR')
-                    # Execute the schema
-                    self.cursor.executescript(schema)
-                    self._conn.commit()
-                    log.info("Database schema created/updated from schema.sql")
-            else:
-                # Fallback: create minimal tables
-                log.warning("schema.sql not found, creating minimal tables")
-                self.cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS kundenstamm (
-                        pk TEXT PRIMARY KEY
-                    )
-                """)
-                self.cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS softfact_vw (
-                        pk TEXT PRIMARY KEY
-                    )
-                """)
-                self.cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS kontodaten_vw (
-                        pk TEXT PRIMARY KEY
-                    )
-                """)
-                self._conn.commit()
-                log.debug("Created minimal table structure")
-        except sqlite3.Error as e:
-            log.error(f"Error creating tables: {e}")
-            raise
+    def _row_to_dict(self, row):
+        """Convert a pyodbc Row object to a dictionary."""
+        if not row:
+            return None
+        columns = [column[0] for column in self.cursor.description]
+        return dict(zip(columns, row))
 
     def close(self):
         """Close the database connection."""
@@ -96,26 +67,37 @@ class Database:
 
     def get_table_columns(self, table_name: str = "kundenstamm") -> List[str]:
         """Get column names for a table."""
-        query = f"PRAGMA table_info({table_name})"
-        result = self.cursor.execute(query).fetchall()
-        columns = [row['name'] for row in result if row['name'] not in ['index']]
+        query = """
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = ? 
+            ORDER BY ORDINAL_POSITION
+        """
+        result = self.cursor.execute(query, (table_name,)).fetchall()
+        columns = [row[0] for row in result if row[0] not in ['index']]
         log.debug(f"Table columns: {columns}")
         return columns
 
     def get_column_info(self, table_name: str = "kundenstamm") -> Dict[str, str]:
         """Get column information including data types."""
-        query = f"PRAGMA table_info({table_name})"
-        result = self.cursor.execute(query).fetchall()
-        return {row['name']: row['type'] for row in result if row['name'] not in ['index']}
+        query = """
+            SELECT COLUMN_NAME, DATA_TYPE 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = ?
+            ORDER BY ORDINAL_POSITION
+        """
+        result = self.cursor.execute(query, (table_name,)).fetchall()
+        return {row[0]: row[1] for row in result if row[0] not in ['index']}
 
     def get_all_data(self, table_name: str = "kundenstamm", limit: Optional[int] = None) -> List[Dict]:
         """Retrieve all data from the table."""
-        query = f"SELECT * FROM {table_name}"
         if limit:
-            query += f" LIMIT {limit}"
+            query = f"SELECT TOP {limit} * FROM {table_name}"
+        else:
+            query = f"SELECT * FROM {table_name}"
 
         result = self.cursor.execute(query).fetchall()
-        return [dict(row) for row in result]
+        return [self._row_to_dict(row) for row in result]
 
     def get_sample_data(self, table_name: str = "kundenstamm", limit: int = 100) -> List[Dict]:
         """Get a sample of data for preview/type detection."""
@@ -133,17 +115,17 @@ class Database:
         else:
             result = self.cursor.execute(query).fetchall()
 
-        return [dict(row) for row in result]
+        return [self._row_to_dict(row) for row in result]
 
     def get_row_count(self, table_name: str = "kundenstamm") -> int:
         """Get count of rows."""
         query = f"SELECT COUNT(*) as count FROM {table_name}"
         result = self.cursor.execute(query).fetchone()
-        return result['count'] if result else 0
+        return result[0] if result else 0
 
     def import_csv_data(self, csv_path: str, table_name: str = "kundenstamm",
                         delimiter: str = ';', truncate: bool = False):
-        """Import data from CSV file into the database."""
+        """Import data from CSV file into the MS SQL database."""
         try:
             # Read CSV with pandas
             df = pd.read_csv(csv_path, delimiter=delimiter)
@@ -189,30 +171,43 @@ class Database:
                         except Exception as e:
                             log.warning(f"Could not convert column '{col}': {e}")
 
-            # Drop the existing table if truncate is True
+            # Truncate the existing table if requested
             if truncate:
-                self.cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                self.cursor.execute(f"TRUNCATE TABLE {table_name}")
                 self._conn.commit()
-                log.info(f"Dropped existing table {table_name}")
+                log.info(f"Truncated table {table_name}")
 
-            # Import to database
-            df_converted.to_sql(table_name, self._conn, if_exists='replace', index=False)
+            # Prepare data for bulk insert
+            columns = list(df_converted.columns)
+            placeholders = ','.join(['?' for _ in columns])
+            columns_str = ','.join([f"[{col}]" for col in columns])  # Bracket column names for MS SQL
+            
+            # Convert DataFrame to list of tuples for executemany
+            data_tuples = [tuple(row) for row in df_converted.values]
+            
+            # Bulk insert using executemany
+            insert_query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+            self.cursor.executemany(insert_query, data_tuples)
             self._conn.commit()
-
+            
             # Verify the import
             self.cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
             count = self.cursor.fetchone()[0]
             log.info(f"Successfully imported {count} records to {table_name}")
 
             # Log table structure
-            self.cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = self.cursor.fetchall()
-            log.info(f"Table now has {len(columns)} columns")
+            columns_query = """
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = ?
+            """
+            self.cursor.execute(columns_query, (table_name,))
+            col_count = self.cursor.fetchone()[0]
+            log.info(f"Table now has {col_count} columns")
 
             if count == 0:
-                log.error("Warning: Table was created but no data was imported!")
+                log.error("Warning: Table exists but no data was imported!")
                 # Try to debug
-                self.cursor.execute(f"SELECT * FROM {table_name} LIMIT 1")
+                self.cursor.execute(f"SELECT TOP 1 * FROM {table_name}")
                 sample = self.cursor.fetchone()
                 log.info(f"Sample row: {sample}")
 
@@ -224,9 +219,14 @@ class Database:
 
     def get_all_tables(self) -> List[str]:
         """Get list of all tables in the database."""
-        query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        result = self.cursor.execute(query).fetchall()
-        return [row['name'] for row in result]
+        query = """
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            AND TABLE_CATALOG = ?
+        """
+        result = self.cursor.execute(query, (self._database,)).fetchall()
+        return [row[0] for row in result]
     
     def get_production_tables(self) -> List[str]:
         """Get list of the three production tables."""
@@ -239,7 +239,11 @@ class Database:
                        params: Optional[tuple] = None,
                        limit: Optional[int] = None) -> List[Dict]:
         """Get data with joins across multiple tables."""
-        query = f"SELECT * FROM {base_table}"
+        # Handle TOP clause for MS SQL
+        if limit:
+            query = f"SELECT TOP {limit} * FROM {base_table}"
+        else:
+            query = f"SELECT * FROM {base_table}"
         
         # Add joins if specified
         if join_tables and join_conditions:
@@ -251,17 +255,13 @@ class Database:
         if where_clause:
             query += f" WHERE {where_clause}"
         
-        # Add limit
-        if limit:
-            query += f" LIMIT {limit}"
-        
         # Execute query
         if params:
             result = self.cursor.execute(query, params).fetchall()
         else:
             result = self.cursor.execute(query).fetchall()
         
-        return [dict(row) for row in result]
+        return [self._row_to_dict(row) for row in result]
     
     def get_table_relationships(self) -> Dict[str, Dict[str, str]]:
         """Get common join relationships between tables."""
