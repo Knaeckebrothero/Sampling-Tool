@@ -1,2 +1,7 @@
 python-dotenv
 pandas
+pyodbc
+
+# Optional: For better DataFrame to SQL performance with MS SQL
+sqlalchemy
+# pymssql>=2.2.0  # Alternative to pyodbc
