@@ -7,7 +7,7 @@ import json
 import logging
 from collections import defaultdict
 from typing import List, Any, Tuple, Optional
-from database import Database
+from database_mssql import Database
 from dotenv import load_dotenv
 
 # Load environment variables
