@@ -6,13 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a German financial audit tool ("Finanzdaten Stichprobentest") that performs stratified sampling on financial datasets. The application provides both desktop (Tkinter) and web (Streamlit) interfaces for financial data sampling and analysis.
 
+The project now supports both SQLite (default) and MS SQL Server databases, with Docker support for development environments.
+
 ## Configuration
 
 The application uses environment variables for configuration. Create a `.env` file in the repository root:
 
 ```bash
-# Database path (default: ./sampling.db)
+# SQLite configuration (default)
 DB_PATH=./sampling.db
+
+# MS SQL Server configuration (optional)
+MSSQL_SERVER=localhost
+MSSQL_DATABASE=SamplingDB
+MSSQL_USERNAME=sa
+MSSQL_PASSWORD=YourStrong@Passw0rd
 
 # Download path for exports
 COPY_PATH=C:\Users\YourUser\Downloads
@@ -22,182 +30,196 @@ COPY_PATH=C:\Users\YourUser\Downloads
 
 ### Installation and Dependencies
 ```bash
-# Install dependencies for basic functionality
+# Install core dependencies
 pip install -r requirements.txt
 
-# Install dependencies for full functionality (including web UI)
-pip install -r "Installation & Start/requirements.txt"
+# Install full dependencies (includes Streamlit for web UI)
+pip install -r "documentation/Installation & Start/requirements.txt"
 ```
 
 ### Running the Application
 ```bash
-# Main application (desktop interface)
+# Main desktop application
 python src/main.py
 
-# Alternative versions:
-python sample_testing_standard.py    # Desktop version
-python sample_testing_advanced.py    # Web version (requires streamlit)
-streamlit run sample_testing_advanced.py  # Web version via Streamlit
+# Web application (Streamlit)
+streamlit run src/streamlit_app.py
 
-# Windows batch scripts (in Installation & Start/)
-install.bat           # One-time setup
+# Alternative entry points
+python sample_testing_standard.py    # Desktop version
+python sample_testing_advanced.py    # Web version
+streamlit run sample_testing_advanced.py
+
+# Windows batch scripts (in documentation/Installation & Start/)
+install.bat           # One-time setup with virtual environment
 start_standard.bat    # Start desktop version
 start_erweitert.bat   # Start web version
 ```
 
 ### Database Operations
 ```bash
-# Initialize database with sample data (simplified)
+# Initialize SQLite database with sample data
 python db_init.py
 
-# The database will be created at:
-# ./sampling.db (in the repository root)
+# Initialize MS SQL Server database
+python src/init_mssql_db.py
 
-# Note: db_init.py has been moved to repository root and automatically:
-# - Loads schema from src/schema.sql
-# - Imports sample data from sample_data/ directory
-# - Creates all three tables: kundenstamm, softfact_vw, kontodaten_vw
+# Test database connections
+python test_connection.py
+
+# Docker MS SQL Server (for development)
+docker-compose up -d
 ```
 
 ## Architecture Overview
 
 ### Core Components
 
-- **`src/main.py`**: Main application entry point with core sampling logic
+- **`src/main.py`**: Main application with core sampling logic and DataHandler class
+- **`src/database_mssql.py`**: Database abstraction layer supporting both SQLite and MS SQL Server
 - **`src/ui_tkinter.py`**: Desktop GUI implementation using Tkinter
-- **`src/database.py`**: SQLite database operations and connection management
-- **`src/import_csv.py`**: CSV/Excel data import functionality
-- **`src/db_init.py`**: Database initialization and schema setup
+- **`src/streamlit_app.py`**: Web GUI implementation using Streamlit
+- **`src/init_mssql_db.py`**: MS SQL Server initialization script
 - **`src/schema.sql`**: Database schema definition
 
-### Application Variants
+### Database Support
 
-The project contains multiple application variants:
-- **Standard**: Desktop-only version using Tkinter (`sample_testing_standard.py`)
-- **Advanced**: Web-based version using Streamlit (`sample_testing_advanced.py`)
-- **Combined**: Feature-rich version with both interfaces (`sample_testing_combined.py`)
+The project uses a database abstraction layer (`src/database_mssql.py`) that supports:
+- **SQLite**: Default, lightweight, file-based database
+- **MS SQL Server**: Enterprise database with Windows Authentication and SQL Authentication support
+- **Docker MS SQL Server**: Development environment using `docker-compose.yml`
 
-### Data Flow
+### Key Classes
 
-1. **Data Import**: CSV/Excel files are imported via pandas and stored in SQLite
-2. **Filtering**: Global dimensional filters are applied to the dataset
-3. **Sampling**: Stratified sampling is performed based on configurable rules
-4. **Export**: Results can be exported in various formats
-
-### Key Classes and Methods
-
-- **`DataHandler`**: Main business logic controller (`src/main.py`)
+- **`DataHandler`** (`src/main.py`): Main business logic controller
   - `load_data()`: Loads data from selected table
-  - `apply_filters()`: Applies dimensional filters
-  - `perform_sampling()`: Executes stratified sampling
+  - `apply_global_filters()`: Applies dimensional filters using SQL
+  - `generate_stratified_sample()`: Executes stratified sampling
+  - `save_configuration()` / `load_configuration()`: Persist filter configurations
 
-- **`Database`**: SQLite connection management (`src/database.py`)
-  - `get_db()`: Factory method for database connections
-  - `execute_query()`: Safe query execution with parameters
+- **`Database`** (`src/database_mssql.py`): Database abstraction layer
+  - Singleton pattern with `get_instance()`
+  - Supports SQLite and MS SQL Server
+  - Connection pooling and parameterized queries
 
-- **`DimensionalFilter`**: Global filtering logic (`src/main.py`)
+- **`DimensionalFilter`** (`src/main.py`): Global filtering logic
   - Supports TEXT, NUMBER, and DATE column types
-  - Generates SQL WHERE clauses dynamically
+  - `to_sql_where()`: Generates SQL WHERE clauses dynamically
 
-- **`SamplingRule`**: Stratified sampling rules (`src/main.py`)
+- **`SamplingRule`** (`src/main.py`): Stratified sampling rules
   - Configurable by dimension, value, sample size, and type
+  - `matches()`: Tests if a row matches the rule criteria
 
 ## Database Schema
 
-The application uses three main tables:
-- **`kundenstamm`**: Customer master data (49 columns)
-- **`softfact_vw`**: Software facts view (14 columns)
-- **`kontodaten_vw`**: Account data view (14 columns)
+Three main tables:
+- **`kundenstamm`**: Customer master data (49 columns) - main entity table
+- **`softfact_vw`**: Software facts view (14 columns) - transaction data
+- **`kontodaten_vw`**: Account data view (14 columns) - account information
 
-Column names are automatically cleaned (spaces → underscores) and support German special characters.
-
-## Dependencies
-
-### Core Dependencies
-- `pandas`: Data manipulation and analysis
-- `python-dotenv`: Environment variable management
-- `tkinter`: Desktop GUI (part of Python standard library)
-
-### Extended Dependencies (for web version)
-- `streamlit`: Web application framework
-- `openpyxl`: Excel file support
+Key relationships:
+- JOIN on `personennummer_pseudonym` and `banknummer`
+- Tables support German special characters (ä, ö, ü, ß)
+- Column names are automatically cleaned (spaces → underscores)
 
 ## Testing and Quality
 
-**Note**: This project currently lacks automated testing infrastructure. When adding tests, consider:
-- Testing data import functionality with various CSV/Excel formats
-- Validating sampling algorithms with known datasets
-- Testing filter logic with edge cases
-- GUI component testing for both interfaces
-
-### Linting and Type Checking
-No linting or type checking is currently configured. Future setup should include:
+### Testing Database Connections
 ```bash
-# Suggested commands (not yet implemented)
-# pylint src/
-# mypy src/
-# black src/
+# Run comprehensive connection tests
+python test_connection.py
 ```
+
+This will test:
+- SQLite connection
+- MS SQL Server (Docker)
+- MS SQL Server (Windows Authentication)
+- Available ODBC drivers
+
+### Currently Missing (Future Development)
+- No automated unit tests
+- No linting configuration (consider pylint, black, mypy)
+- No CI/CD pipeline
 
 ## Development Workflow
 
-### File Organization
-- Source code: `src/`
-- Documentation: `Dokumentation/` (German)
-- Installation scripts: `Installation & Start/`
-- Example data: `example_data.csv`, `example_data.xlsx`
-- Additional scripts: `Python-Skripte/`
+### Adding New Sampling Rules
+1. Modify `SamplingRule` class in `src/main.py`
+2. Update UI components in `src/ui_tkinter.py` or `src/streamlit_app.py`
+3. Test with sample data using `python db_init.py`
+
+### Database Schema Changes
+1. Update `src/schema.sql`
+2. Modify `Database` class methods in `src/database_mssql.py`
+3. Update initialization scripts (`db_init.py` or `src/init_mssql_db.py`)
+4. Reinitialize database
+
+### Switching Between Databases
+```python
+# In code, use the Database factory
+from src.database_mssql import Database
+
+# SQLite (default)
+db = Database.get_instance(db_type='sqlite')
+
+# MS SQL Server
+db = Database.get_instance(db_type='mssql', connection_params={...})
+```
+
+## Docker Development Environment
+
+Start MS SQL Server in Docker:
+```bash
+# Start container
+docker-compose up -d
+
+# Initialize database
+python src/init_mssql_db.py
+
+# Stop container
+docker-compose down
+```
 
 ## Language and Localization
 
 The application is designed for German-speaking users:
 - UI labels and messages are in German
-- Documentation is in German
-- Date formats follow German conventions (DD.MM.YYYY)
-- Number formats support comma as decimal separator
-
-## Common Operations
-
-### Adding New Sampling Rules
-1. Modify the `SamplingRule` class in `src/main.py`
-2. Update the UI components in `src/ui_tkinter.py` or Streamlit interface
-3. Test with sample data
-
-### Database Schema Changes
-1. Update `src/schema.sql`
-2. Modify `src/database.py` for new operations
-3. Update `src/db_init.py` for initialization
-4. Run `python src/db_init.py` to reinitialize
-
-### Adding New Filter Types
-1. Extend `ColumnType` enum in `src/main.py`
-2. Add new filter logic in `DimensionalFilter` class
-3. Update UI components to support new filter type
+- Date formats: DD.MM.YYYY
+- Number formats: comma as decimal separator (1.234,56)
+- All user-facing text in German
 
 ## Important Implementation Details
 
 ### European Number Format Handling
-The application automatically detects and converts European number formats:
+Automatic detection and conversion:
 - Comma (,) as decimal separator
 - Period (.) as thousands separator
+- Handled in `detect_column_type()` method
 
 ### Date Format Detection
-Supports multiple date formats including:
-- DD.MM.YYYY
+Supports multiple formats:
+- DD.MM.YYYY (primary)
 - YYYY-MM-DD
 - DD/MM/YYYY
+- Auto-detection in `detect_column_type()`
 
-### SQL Query Generation
-All database queries use parameterized statements to prevent SQL injection:
+### SQL Injection Prevention
+All database queries use parameterized statements:
 ```python
-# Example from codebase
 query = f"SELECT * FROM {table_name} WHERE {where_clause}"
-cursor.execute(query, params)
+cursor.execute(query, params)  # params are sanitized
 ```
+
+### Performance Considerations
+- Database singleton pattern prevents connection overhead
+- Batch operations for large datasets
+- Indexed columns for filtering operations
+- Connection pooling for MS SQL Server
 
 ## Security Considerations
 
-- Database operations use parameterized queries to prevent SQL injection
-- File paths are validated during import operations
-- The application runs locally with no network exposure by default
-- No authentication system is implemented (local use assumed)
+- Parameterized queries prevent SQL injection
+- Environment variables for sensitive configuration
+- No hardcoded credentials in code
+- Local deployment only (no network exposure by default)
+- File path validation during import operations

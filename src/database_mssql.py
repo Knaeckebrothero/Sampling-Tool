@@ -27,6 +27,121 @@ class DatabaseType(Enum):
     MSSQL = "mssql"
 
 
+class Row:
+    """
+    Custom row class that provides both index and key-based access to row data.
+    Similar to sqlite3.Row but for pyodbc.
+    """
+    def __init__(self, cursor_description, row_data):
+        self._description = cursor_description
+        self._data = row_data
+        self._keys = [column[0] for column in cursor_description]
+    
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._data[key]
+        elif isinstance(key, str):
+            try:
+                index = self._keys.index(key)
+                return self._data[index]
+            except ValueError:
+                raise KeyError(f"No such column: {key}")
+        else:
+            raise TypeError(f"Invalid key type: {type(key)}")
+    
+    def __len__(self):
+        return len(self._data)
+    
+    def __iter__(self):
+        """Make Row objects work with dict() constructor - iterate over key-value pairs"""
+        return iter(self.items())
+    
+    def keys(self):
+        return self._keys
+    
+    def values(self):
+        return list(self._data)
+    
+    def items(self):
+        return zip(self._keys, self._data)
+    
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except (KeyError, IndexError):
+            return default
+    
+    def __contains__(self, key):
+        return key in self._keys
+    
+    def __repr__(self):
+        items = ', '.join(f"{k}={repr(v)}" for k, v in zip(self._keys, self._data))
+        return f"Row({{{items}}})"
+
+
+class RowFactoryCursor:
+    """
+    Cursor wrapper that converts pyodbc rows to dictionary-like Row objects.
+    """
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.description = cursor.description
+    
+    def execute(self, query, params=None):
+        if params:
+            result = self._cursor.execute(query, params)
+        else:
+            result = self._cursor.execute(query)
+        self.description = self._cursor.description
+        return self
+    
+    def executemany(self, query, params):
+        return self._cursor.executemany(query, params)
+    
+    def executescript(self, script):
+        return self._cursor.executescript(script)
+    
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        if self._cursor.description:
+            return Row(self._cursor.description, row)
+        return row
+    
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        if not rows:
+            return []
+        if self._cursor.description:
+            return [Row(self._cursor.description, row) for row in rows]
+        return rows
+    
+    def fetchmany(self, size=None):
+        if size is None:
+            rows = self._cursor.fetchmany()
+        else:
+            rows = self._cursor.fetchmany(size)
+        if not rows:
+            return []
+        if self._cursor.description:
+            return [Row(self._cursor.description, row) for row in rows]
+        return rows
+    
+    def __getattr__(self, name):
+        # Delegate all other attributes to the underlying cursor
+        return getattr(self._cursor, name)
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
+
+
 class Database:
     """
     Database manager supporting both SQLite and MS SQL Server.
@@ -132,7 +247,8 @@ class Database:
 
         # Connect
         self._conn = pyodbc.connect(connection_string)
-        self.cursor = self._conn.cursor()
+        # Wrap cursor with our RowFactoryCursor to provide dictionary-like access
+        self.cursor = RowFactoryCursor(self._conn.cursor())
         log.info(f"Connected to MS SQL Server: {server}/{database}")
 
         # Check if tables exist
@@ -269,10 +385,11 @@ class Database:
         result = self.cursor.execute(query).fetchall()
 
         # Convert to list of dicts
-        if self.db_type == DatabaseType.SQLITE and hasattr(result[0] if result else None, 'keys'):
+        if hasattr(result[0] if result else None, 'keys'):
+            # Row objects (both SQLite with row_factory and our custom Row class)
             return [dict(row) for row in result]
         else:
-            # Get column names
+            # Plain tuples (shouldn't happen with our wrapper, but kept for safety)
             columns = [desc[0] for desc in self.cursor.description]
             return [dict(zip(columns, row)) for row in result]
 
@@ -293,9 +410,11 @@ class Database:
             result = self.cursor.execute(query).fetchall()
 
         # Convert to list of dicts
-        if self.db_type == DatabaseType.SQLITE and hasattr(result[0] if result else None, 'keys'):
+        if hasattr(result[0] if result else None, 'keys'):
+            # Row objects (both SQLite with row_factory and our custom Row class)
             return [dict(row) for row in result]
         else:
+            # Plain tuples (shouldn't happen with our wrapper, but kept for safety)
             columns = [desc[0] for desc in self.cursor.description]
             return [dict(zip(columns, row)) for row in result]
 
@@ -304,9 +423,11 @@ class Database:
         query = f"SELECT COUNT(*) as count FROM {table_name}"
         result = self.cursor.execute(query).fetchone()
 
-        if self.db_type == DatabaseType.SQLITE and hasattr(result, 'keys'):
+        if hasattr(result, 'keys'):
+            # Row objects (both SQLite with row_factory and our custom Row class)
             return result['count'] if result else 0
         else:
+            # Plain tuple (shouldn't happen with our wrapper, but kept for safety)
             return result[0] if result else 0
 
     def import_csv_data(self, csv_path: str, table_name: str = "kundenstamm",
@@ -374,9 +495,14 @@ class Database:
 
         result = self.cursor.execute(query).fetchall()
 
-        if self.db_type == DatabaseType.SQLITE and hasattr(result[0] if result else None, 'keys'):
-            return [row['name'] for row in result]
+        if hasattr(result[0] if result else None, 'keys'):
+            # Row objects
+            if self.db_type == DatabaseType.SQLITE:
+                return [row['name'] for row in result]
+            else:
+                return [row['TABLE_NAME'] for row in result]
         else:
+            # Plain tuples
             return [row[0] for row in result]
 
     def get_production_tables(self) -> List[str]:
@@ -417,9 +543,11 @@ class Database:
             result = self.cursor.execute(query).fetchall()
 
         # Convert to list of dicts
-        if self.db_type == DatabaseType.SQLITE and hasattr(result[0] if result else None, 'keys'):
+        if hasattr(result[0] if result else None, 'keys'):
+            # Row objects (both SQLite with row_factory and our custom Row class)
             return [dict(row) for row in result]
         else:
+            # Plain tuples (shouldn't happen with our wrapper, but kept for safety)
             columns = [desc[0] for desc in self.cursor.description]
             return [dict(zip(columns, row)) for row in result]
 
