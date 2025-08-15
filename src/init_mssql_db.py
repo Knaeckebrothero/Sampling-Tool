@@ -202,8 +202,8 @@ def insert_sample_data(connection):
             None, None, None, None, None, None,
             None, None, None, None, None, None,
             None, None, None, None, None, None,
-            None, None, None, None, random.choice(['Y', 'N']),
-            None, None, None, None, None, None
+            None, None, None, None, random.randint(1, 3),
+            random.choice(['Y', 'N']), None, None, None, None, None, None
         ))
 
     # Insert customers
