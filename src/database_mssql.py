@@ -204,32 +204,36 @@ class Database:
         self._create_sqlite_tables()
 
     def _connect_mssql(self):
-        """Connect to MS SQL Server database."""
+        """Connect to MS SQL Server database with support for encrypted connections."""
         if not MSSQL_AVAILABLE:
             raise ImportError("pyodbc is required for MS SQL Server support. Install it with: pip install pyodbc")
 
         # Build connection string based on authentication method
         auth_method = self.connection_params.get('auth_method') or os.getenv('MSSQL_AUTH_METHOD', 'sql')
 
+        # Common parameters
+        server = self.connection_params.get('server') or os.getenv('MSSQL_SERVER', 'localhost')
+        database = self.connection_params.get('database') or os.getenv('MSSQL_DATABASE', 'SamplingDB')
+        driver = self.connection_params.get('driver') or os.getenv('MSSQL_DRIVER', 'ODBC Driver 17 for SQL Server')
+        
+        # Port handling (default 1433)
+        port = self.connection_params.get('port') or os.getenv('MSSQL_PORT', '1433')
+        if port != '1433':
+            server = f"{server},{port}"
+
         if auth_method == 'windows':
             # Windows Authentication
-            server = self.connection_params.get('server') or os.getenv('MSSQL_SERVER', 'localhost')
-            database = self.connection_params.get('database') or os.getenv('MSSQL_DATABASE', 'SamplingDB')
-            driver = self.connection_params.get('driver') or os.getenv('MSSQL_DRIVER', 'ODBC Driver 17 for SQL Server')
-
             connection_string = (
                 f"DRIVER={{{driver}}};"
                 f"SERVER={server};"
                 f"DATABASE={database};"
                 f"Trusted_Connection=yes;"
             )
+            log.info(f"Using Windows Authentication for {server}")
 
         else:  # SQL Authentication
-            server = self.connection_params.get('server') or os.getenv('MSSQL_SERVER', 'localhost')
-            database = self.connection_params.get('database') or os.getenv('MSSQL_DATABASE', 'SamplingDB')
             username = self.connection_params.get('username') or os.getenv('MSSQL_USERNAME', 'sa')
             password = self.connection_params.get('password') or os.getenv('MSSQL_PASSWORD', 'YourStrong@Passw0rd')
-            driver = self.connection_params.get('driver') or os.getenv('MSSQL_DRIVER', 'ODBC Driver 17 for SQL Server')
 
             connection_string = (
                 f"DRIVER={{{driver}}};"
@@ -238,21 +242,94 @@ class Database:
                 f"UID={username};"
                 f"PWD={password};"
             )
+            log.info(f"Using SQL Authentication for {server} as {username}")
 
-        # Additional connection options
-        if self.connection_params.get('encrypt', True):
+        # Encryption settings with proper defaults for different drivers
+        # ODBC Driver 18 defaults to mandatory encryption, 17 and older default to optional
+        if 'Driver 18' in driver:
+            # Driver 18 requires explicit encryption settings
+            encrypt = self.connection_params.get('encrypt', os.getenv('MSSQL_ENCRYPT', 'true').lower() == 'true')
+            trust_cert = self.connection_params.get('trust_server_certificate', 
+                                                   os.getenv('MSSQL_TRUST_CERT', 'true').lower() == 'true')
+        else:
+            # Driver 17 and older - default to encryption on
+            encrypt = self.connection_params.get('encrypt', os.getenv('MSSQL_ENCRYPT', 'true').lower() == 'true')
+            trust_cert = self.connection_params.get('trust_server_certificate', 
+                                                   os.getenv('MSSQL_TRUST_CERT', 'true').lower() == 'true')
+        
+        if encrypt:
             connection_string += "Encrypt=yes;"
-        if self.connection_params.get('trust_server_certificate', True):
+            log.info("Encryption enabled for connection")
+        else:
+            connection_string += "Encrypt=no;"
+            log.warning("Encryption disabled - connection is not secure!")
+        
+        if trust_cert:
             connection_string += "TrustServerCertificate=yes;"
+            log.info("Trusting server certificate (suitable for dev/test)")
+        else:
+            connection_string += "TrustServerCertificate=no;"
+            log.info("Server certificate validation enabled (production mode)")
+
+        # Optional: Connection timeout
+        timeout = self.connection_params.get('connection_timeout') or os.getenv('MSSQL_TIMEOUT', '30')
+        connection_string += f"Connection Timeout={timeout};"
 
         # Connect
-        self._conn = pyodbc.connect(connection_string)
-        # Wrap cursor with our RowFactoryCursor to provide dictionary-like access
-        self.cursor = RowFactoryCursor(self._conn.cursor())
-        log.info(f"Connected to MS SQL Server: {server}/{database}")
+        try:
+            self._conn = pyodbc.connect(connection_string)
+            # Wrap cursor with our RowFactoryCursor to provide dictionary-like access
+            self.cursor = RowFactoryCursor(self._conn.cursor())
+            
+            # Log connection security status
+            self._log_connection_security()
+            log.info(f"Successfully connected to MS SQL Server: {server}/{database}")
+            
+        except pyodbc.Error as e:
+            log.error(f"Failed to connect to MS SQL Server: {e}")
+            if "SSL" in str(e) or "certificate" in str(e).lower() or "encrypt" in str(e).lower():
+                log.error("This appears to be an SSL/TLS related error. Check encryption settings.")
+                log.error("Try setting MSSQL_TRUST_CERT=true for self-signed certificates.")
+            raise
 
         # Check if tables exist
         self._check_mssql_tables()
+    
+    def _log_connection_security(self):
+        """Log the security status of the current connection."""
+        if self.db_type != DatabaseType.MSSQL:
+            return
+        
+        try:
+            # Query to check if connection is encrypted
+            query = """
+            SELECT 
+                encrypt_option,
+                auth_scheme,
+                protocol_type,
+                client_net_address
+            FROM sys.dm_exec_connections 
+            WHERE session_id = @@SPID
+            """
+            
+            result = self.cursor.execute(query).fetchone()
+            
+            if result:
+                encrypt_status = result[0] if result[0] else 'UNKNOWN'
+                auth_scheme = result[1] if result[1] else 'UNKNOWN'
+                protocol = result[2] if result[2] else 'UNKNOWN'
+                client_addr = result[3] if result[3] else 'UNKNOWN'
+                
+                if encrypt_status == 'TRUE':
+                    log.info(f"✅ Connection is ENCRYPTED (Auth: {auth_scheme}, Protocol: {protocol})")
+                elif encrypt_status == 'FALSE':
+                    log.warning(f"⚠️  Connection is NOT ENCRYPTED (Auth: {auth_scheme}, Protocol: {protocol})")
+                else:
+                    log.info(f"Connection security status: {encrypt_status} (Auth: {auth_scheme})")
+                    
+                log.debug(f"Connection details - Client: {client_addr}, Protocol: {protocol}")
+        except Exception as e:
+            log.debug(f"Could not query connection security status: {e}")
 
     def _create_sqlite_tables(self):
         """Create SQLite tables if they don't exist."""
@@ -564,6 +641,49 @@ class Database:
             }
         }
 
+    def test_connection(self) -> bool:
+        """Test if the database connection is working."""
+        try:
+            if self.db_type == DatabaseType.SQLITE:
+                self.cursor.execute("SELECT 1")
+            else:  # MS SQL Server
+                self.cursor.execute("SELECT 1")
+            result = self.cursor.fetchone()
+            return result is not None
+        except Exception as e:
+            log.error(f"Connection test failed: {e}")
+            return False
+    
+    def get_connection_info(self) -> Dict[str, Any]:
+        """Get information about the current connection."""
+        info = {
+            'db_type': self.db_type.value,
+            'connected': self.test_connection()
+        }
+        
+        if self.db_type == DatabaseType.MSSQL and info['connected']:
+            try:
+                # Get SQL Server version
+                version_query = "SELECT @@VERSION"
+                result = self.cursor.execute(version_query).fetchone()
+                if result:
+                    info['server_version'] = str(result[0]).split('\n')[0]
+                
+                # Get encryption status
+                encrypt_query = """
+                SELECT encrypt_option 
+                FROM sys.dm_exec_connections 
+                WHERE session_id = @@SPID
+                """
+                result = self.cursor.execute(encrypt_query).fetchone()
+                if result:
+                    info['encrypted'] = result[0] == 'TRUE'
+                    
+            except Exception as e:
+                log.debug(f"Could not get full connection info: {e}")
+        
+        return info
+    
     @classmethod
     def get_instance(cls, db_type: Optional[str] = None, connection_params: Optional[Dict] = None):
         """Factory method to get database instance."""

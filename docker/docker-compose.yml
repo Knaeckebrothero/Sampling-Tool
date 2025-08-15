@@ -8,15 +8,18 @@ services:
       - ACCEPT_EULA=Y
       - SA_PASSWORD=YourStrong@Passw0rd
       - MSSQL_PID=Developer  # Developer edition (free for dev/test)
+      # Force encryption support
+      - MSSQL_FORCE_ENCRYPTION=1  # Enable TLS/SSL
     ports:
       - "1433:1433"
     volumes:
       - mssql-data:/var/opt/mssql
       - ./init-scripts:/docker-entrypoint-initdb.d  # For initialization scripts
+      - ./certs:/var/opt/mssql/certs  # For SSL certificates
     networks:
       - sampling-network
     healthcheck:
-      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "YourStrong@Passw0rd", "-Q", "SELECT 1"]
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "YourStrong@Passw0rd", "-Q", "SELECT 1", "-N", "-C"]
       interval: 10s
       timeout: 5s
       retries: 5
